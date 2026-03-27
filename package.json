@@ -26,6 +26,11 @@
   ],
   "author": "NaN Logic LLC",
   "license": "MIT",
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
     "@qdrant/js-client-rest": "^1.13.0",
