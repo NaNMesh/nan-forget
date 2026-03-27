@@ -1,0 +1,40 @@
+{
+  "name": "nan-forget",
+  "version": "0.1.0",
+  "description": "Long-term memory for AI coding tools",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "nan-forget": "./bin/nan-forget.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "tsx src/cli/index.ts",
+    "setup": "tsx src/setup/index.ts",
+    "serve": "tsx src/mcp/server.ts",
+    "clean": "tsx src/cli/index.ts clean",
+    "stats": "tsx src/cli/index.ts stats"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "llm",
+    "qdrant",
+    "claude"
+  ],
+  "author": "NaN Logic LLC",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "@qdrant/js-client-rest": "^1.13.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
