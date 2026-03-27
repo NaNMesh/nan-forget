@@ -1,0 +1,43 @@
+# Smithery configuration: https://smithery.ai/docs/config#smitheryyaml
+
+startCommand:
+  type: stdio
+
+configSchema:
+  type: object
+  required: []
+  properties:
+    embeddingProvider:
+      type: string
+      default: ollama
+      description: "Embedding provider: ollama (free, local) or openai"
+      enum:
+        - ollama
+        - openai
+    openaiApiKey:
+      type: string
+      description: "OpenAI API key (only needed if embeddingProvider is openai)"
+    qdrantUrl:
+      type: string
+      default: "http://localhost:6333"
+      description: "Qdrant vector database URL"
+    userId:
+      type: string
+      default: default
+      description: "User ID for memory isolation. All sessions with the same ID share memory."
+    projectRoot:
+      type: string
+      description: "Project root directory for MEMORY.md (defaults to cwd)"
+
+commandFunction: |-
+  (config) => ({
+    command: 'npx',
+    args: ['tsx', 'src/mcp/server.ts'],
+    env: {
+      NAN_FORGET_EMBEDDING_PROVIDER: config.embeddingProvider || 'ollama',
+      OPENAI_API_KEY: config.openaiApiKey || '',
+      NAN_FORGET_QDRANT_URL: config.qdrantUrl || 'http://localhost:6333',
+      NAN_FORGET_USER_ID: config.userId || 'default',
+      NAN_FORGET_PROJECT_ROOT: config.projectRoot || process.cwd()
+    }
+  })
