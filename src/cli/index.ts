@@ -10,9 +10,11 @@
  *   nan-forget update <id> [--content "text"] [--type TYPE] [--tags t1,t2]
  *   nan-forget archive <id>
  *   nan-forget clean
+ *   nan-forget consolidate [--project PROJECT]
  *   nan-forget stats
  *   nan-forget export
  *   nan-forget serve   (start MCP server on stdio)
+ *   nan-forget api     (start REST API server)
  */
 
 import { parseArgs } from 'node:util';
@@ -21,6 +23,7 @@ import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
 import { clean } from '../cleaner.js';
+import { consolidate } from '../consolidator.js';
 import { read as readMemoryMd } from '../memory-md.js';
 import type { MemoryType, MemoryStatus, EmbeddingProvider } from '../types.js';
 
@@ -257,6 +260,32 @@ export async function cmdStats(_args: string[]): Promise<string> {
   return lines.join('\n');
 }
 
+export async function cmdConsolidate(args: string[]): Promise<string> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      project: { type: 'string', short: 'p' },
+    },
+    strict: false,
+  });
+
+  const { client, embedder, userId, projectRoot } = getClient();
+  await ensureCollection(client, embedder.provider);
+
+  const result = await consolidate(client, embedder, userId, {
+    project: values.project as string | undefined,
+    project_root: projectRoot,
+  });
+
+  return [
+    '✓ Consolidation complete:',
+    `  Clusters found:        ${result.clusters_found}`,
+    `  Memories consolidated:  ${result.memories_consolidated}`,
+    `  New entries created:    ${result.new_memories_created}`,
+    `  Duration:              ${result.duration_ms}ms`,
+  ].join('\n');
+}
+
 export async function cmdExport(_args: string[]): Promise<string> {
   const { client, userId } = getClient();
 
@@ -274,6 +303,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
   update: cmdUpdate,
   archive: cmdArchive,
   clean: cmdClean,
+  consolidate: cmdConsolidate,
   stats: cmdStats,
   export: cmdExport,
 };
@@ -291,9 +321,11 @@ Commands:
   update <id>        Update a memory
   archive <id>       Archive a memory
   clean              Run cleaner (GC + sync)
+  consolidate        Consolidate aging memories into long-term entries
   stats              Show memory stats
   export             Export all memories as JSON
   serve              Start MCP server (stdio)
+  api                Start REST API server
 
 Options (vary by command):
   -t, --type         fact|decision|preference|task|context
@@ -322,6 +354,13 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
   if (command === 'serve') {
     // Dynamic import to avoid loading MCP SDK for non-serve commands
     await import('../mcp/server.js');
+    return;
+  }
+
+  if (command === 'api') {
+    const { startApiServer } = await import('../api/server.js');
+    const port = parseInt(args[0] ?? process.env.NAN_FORGET_API_PORT ?? '3456', 10);
+    startApiServer(port);
     return;
   }
 

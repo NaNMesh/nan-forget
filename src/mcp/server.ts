@@ -2,24 +2,30 @@
 /**
  * NaN Forget MCP Server
  *
- * 5 tools: memory_save, memory_search, memory_get, memory_update, memory_archive
+ * 8 tools: memory_save, memory_search, memory_get, memory_update, memory_archive,
+ *          memory_consolidate, memory_clean, memory_stats
  * Runs over stdio. Connects to local Qdrant.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { createQdrantClient, ensureCollection, getMemory, updateMemory } from '../qdrant.js';
+import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories } from '../qdrant.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
 import { clean } from '../cleaner.js';
+import { consolidate } from '../consolidator.js';
 import {
   read as readMemoryMd,
   write as writeMemoryMd,
   addLine,
 } from '../memory-md.js';
 import type { MemoryType } from '../types.js';
+
+// --- Auto-consolidate state ---
+let savesSinceConsolidate = 0;
+let lastConsolidateAt = Date.now();
 
 // --- Config from env ---
 
@@ -53,7 +59,7 @@ export function createServer(deps?: ServerDeps) {
 
   const server = new McpServer({
     name: 'nan-forget',
-    version: '0.1.0',
+    version: '0.1.1',
   });
 
   // ═══════════════════════════════════════
@@ -92,6 +98,19 @@ export function createServer(deps?: ServerDeps) {
           });
           await writeMemoryMd(state, projectRoot);
         }
+      }
+
+      // Auto-consolidate check
+      savesSinceConsolidate++;
+      const hoursSinceClean = (Date.now() - lastConsolidateAt) / (1000 * 60 * 60);
+      if (savesSinceConsolidate >= 10 || hoursSinceClean >= 24) {
+        savesSinceConsolidate = 0;
+        lastConsolidateAt = Date.now();
+        // Fire and forget — non-blocking
+        consolidate(client, embedder, userId, { project_root: projectRoot })
+          .then(() => clean(client, embedder, userId, { project_root: projectRoot }))
+          .then(() => console.error('Auto-consolidate + clean completed'))
+          .catch((err) => console.error('Auto-consolidate failed:', err));
       }
 
       return {
@@ -249,6 +268,109 @@ export function createServer(deps?: ServerDeps) {
 
       return {
         content: [{ type: 'text' as const, text: `Memory archived: ${id}` }],
+      };
+    }
+  );
+
+  // ═══════════════════════════════════════
+  // Tool 6: memory_consolidate
+  // ═══════════════════════════════════════
+  server.tool(
+    'memory_consolidate',
+    'Consolidate aging memories into compact long-term entries. Clusters related memories by topic, summarizes them (LLM if available, deterministic fallback), and creates new searchable entries. Original memories are archived. Run this periodically or let it happen automatically after every 10 saves.',
+    {
+      project: z.string().optional().describe('Limit consolidation to a specific project'),
+    },
+    async ({ project }) => {
+      await ensureCollection(client, embedder.provider);
+
+      const result = await consolidate(client, embedder, userId, {
+        project,
+        project_root: projectRoot,
+      });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: [
+            'Consolidation complete:',
+            `  Clusters found:        ${result.clusters_found}`,
+            `  Memories consolidated:  ${result.memories_consolidated}`,
+            `  New entries created:    ${result.new_memories_created}`,
+            `  Duration:              ${result.duration_ms}ms`,
+          ].join('\n'),
+        }],
+      };
+    }
+  );
+
+  // ═══════════════════════════════════════
+  // Tool 7: memory_clean
+  // ═══════════════════════════════════════
+  server.tool(
+    'memory_clean',
+    'Run garbage collection on memories. Archives decayed (unused) memories, removes expired ones, deduplicates near-identical entries, and syncs MEMORY.md. Use after consolidation or when memory feels cluttered.',
+    {},
+    async () => {
+      await ensureCollection(client, embedder.provider);
+
+      const result = await clean(client, embedder, userId, {
+        project_root: projectRoot,
+      });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: [
+            'Clean complete:',
+            `  Archived (decayed):  ${result.archived_decayed}`,
+            `  Archived (expired):  ${result.archived_expired}`,
+            `  Archived (deduped):  ${result.archived_deduped}`,
+            `  MEMORY.md synced:    ${result.memory_md_synced}`,
+            `  Duration:            ${result.duration_ms}ms`,
+          ].join('\n'),
+        }],
+      };
+    }
+  );
+
+  // ═══════════════════════════════════════
+  // Tool 8: memory_stats
+  // ═══════════════════════════════════════
+  server.tool(
+    'memory_stats',
+    'Show memory statistics: active/archived counts, breakdown by type and project. Use to check memory health and understand what you remember.',
+    {},
+    async () => {
+      const active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
+      const archived = await scrollMemories(client, { user_id: userId, status: 'archived' }, 1000);
+
+      const byType: Record<string, number> = {};
+      const byProject: Record<string, number> = {};
+      let consolidatedCount = 0;
+      for (const m of active) {
+        byType[m.type] = (byType[m.type] ?? 0) + 1;
+        byProject[m.project] = (byProject[m.project] ?? 0) + 1;
+        if (m.consolidated_from?.length) consolidatedCount++;
+      }
+
+      const lines = [
+        'NaN Forget — Memory Stats',
+        '',
+        `Active:       ${active.length}`,
+        `Archived:     ${archived.length}`,
+        `Consolidated: ${consolidatedCount}`,
+        `Total:        ${active.length + archived.length}`,
+        '',
+        'By type:',
+        ...Object.entries(byType).map(([t, c]) => `  ${t}: ${c}`),
+        '',
+        'By project:',
+        ...Object.entries(byProject).map(([p, c]) => `  ${p}: ${c}`),
+      ];
+
+      return {
+        content: [{ type: 'text' as const, text: lines.join('\n') }],
       };
     }
   );

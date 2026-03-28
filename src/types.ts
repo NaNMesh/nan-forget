@@ -20,6 +20,7 @@ export interface Memory {
   last_accessed: string;
   embedding_provider: EmbeddingProvider;
   embedding_model: string;
+  consolidated_from?: string[];
 }
 
 export type MemoryPayload = Omit<Memory, 'id'>;
