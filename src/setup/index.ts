@@ -204,37 +204,62 @@ interface McpConfig {
   }>;
 }
 
-async function writeMcpConfig(provider: string, openaiKey: string): Promise<string> {
-  const claudeConfigDir = join(homedir(), '.claude');
-  const configPath = join(claudeConfigDir, 'claude_desktop_config.json');
+async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<string> {
+  // Register MCP server via `claude mcp add` (works for Claude Code)
+  const { ok: hasClaude } = run('which claude');
 
-  await mkdir(claudeConfigDir, { recursive: true });
-
-  let config: McpConfig = { mcpServers: {} };
-
-  try {
-    await access(configPath);
-    const raw = await readFile(configPath, 'utf-8');
-    config = JSON.parse(raw);
-    if (!config.mcpServers) config.mcpServers = {};
-  } catch {
-    // New file
+  if (hasClaude) {
+    // Remove old entry first (ignore errors if not exists)
+    run('claude mcp remove nan-forget 2>/dev/null');
+    const { ok } = run('claude mcp add nan-forget -- npx nan-forget serve');
+    if (ok) {
+      return 'Claude Code MCP (via claude mcp add)';
+    }
   }
 
-  const env: Record<string, string> = {
-    NAN_FORGET_PROJECT_ROOT: process.cwd(),
-    NAN_FORGET_EMBEDDING_PROVIDER: provider,
-  };
-  if (openaiKey) env.OPENAI_API_KEY = openaiKey;
+  // Fallback: write directly to ~/.claude.json
+  const claudeJsonPath = join(homedir(), '.claude.json');
+  try {
+    let config: Record<string, unknown> = {};
+    try {
+      const raw = await readFile(claudeJsonPath, 'utf-8');
+      config = JSON.parse(raw);
+    } catch { /* new file */ }
 
-  config.mcpServers['nan-forget'] = {
-    command: 'npx',
-    args: ['tsx', resolve('src/mcp/server.ts')],
-    env,
-  };
+    const projects = (config.projects ?? {}) as Record<string, Record<string, unknown>>;
+    // Add to global mcpServers
+    if (!config.mcpServers) config.mcpServers = {};
+    (config.mcpServers as Record<string, unknown>)['nan-forget'] = {
+      type: 'stdio',
+      command: 'npx',
+      args: ['nan-forget', 'serve'],
+      env: {},
+    };
 
-  await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
-  return configPath;
+    // Also write Claude Desktop config for GUI users
+    const claudeConfigDir = join(homedir(), '.claude');
+    const desktopConfigPath = join(claudeConfigDir, 'claude_desktop_config.json');
+    await mkdir(claudeConfigDir, { recursive: true });
+
+    let desktopConfig: McpConfig = { mcpServers: {} };
+    try {
+      await access(desktopConfigPath);
+      const raw = await readFile(desktopConfigPath, 'utf-8');
+      desktopConfig = JSON.parse(raw);
+      if (!desktopConfig.mcpServers) desktopConfig.mcpServers = {};
+    } catch { /* new file */ }
+
+    desktopConfig.mcpServers['nan-forget'] = {
+      command: 'npx',
+      args: ['nan-forget', 'serve'],
+      env: {},
+    };
+    await writeFile(desktopConfigPath, JSON.stringify(desktopConfig, null, 2), 'utf-8');
+
+    return claudeJsonPath;
+  } catch {
+    return 'Failed to write MCP config';
+  }
 }
 
 // --- .env ---
@@ -387,9 +412,16 @@ process.stdin.on('end', () => {
 
 ## Rules (Non-Negotiable)
 
-1. At session start: You MUST call memory_sync with the current project name.
-2. During the session: You MUST call memory_save immediately whenever you learn a decision, preference, fact, or context.
-3. If services are down: Ask the user, then call memory_start.
+1. **At session start**: Call \`memory_sync\` ONCE. Lightweight handshake — checks services and tells you how many memories exist. It does NOT search.
+2. **During the session — SEARCH**: Whenever you encounter a topic that may have prior context, call \`memory_search\` IMMEDIATELY. Do NOT wait for the user to ask.
+3. **During the session — SAVE**: Call \`memory_save\` immediately whenever you learn a decision, preference, fact, or context. Do NOT wait. Do NOT batch. Save as you go.
+4. **If services are down**: \`memory_sync\` will tell you. Ask the user, then call \`memory_start\`.
+
+## How to Think About It
+
+- \`memory_sync\` = "wake up, check if brain is working"
+- \`memory_search\` = "do I remember anything about this topic?" (call often, during conversation)
+- \`memory_save\` = "I should remember this for next time" (call immediately when you learn something)
 
 ## What to Save
 
@@ -398,7 +430,7 @@ process.stdin.on('end', () => {
 
 ## Context Management
 
-Fully automatic. Consolidation and cleanup run after every 10 saves.
+Fully automatic. Consolidation and cleanup run after every 10 saves or 24h.
 `;
       await writeFile(claudeMdDest, claudeMd, 'utf-8');
     }
@@ -517,6 +549,55 @@ export async function setup(): Promise<void> {
   await installHooksAndClaudeMd();
   console.log('  ✓ Claude Code hooks installed');
   console.log('  ✓ CLAUDE.md created');
+
+  // ── Step 8: Install global slash command ──
+  const globalCommandsDir = join(homedir(), '.claude', 'commands');
+  await mkdir(globalCommandsDir, { recursive: true });
+  const slashCommandSrc = join(resolve(__dirname, '..', '..'), '.claude', 'commands', 'nan-forget.md');
+  const slashCommandDest = join(globalCommandsDir, 'nan-forget.md');
+  try {
+    await copyFile(slashCommandSrc, slashCommandDest);
+    console.log('  ✓ /nan-forget slash command installed globally');
+  } catch {
+    // Source doesn't exist (npm install), write inline
+    const slashContent = `# nan-forget — Memory Management
+
+Manual control for your AI long-term memory. Run without arguments to sync context, or with a subcommand.
+
+## Usage
+
+- \`/nan-forget\` — Load context from past sessions (calls memory_sync)
+- \`/nan-forget clean\` — Run garbage collection on stale memories
+- \`/nan-forget stats\` — Show memory health
+- \`/nan-forget compact\` — Force consolidation of aging memories
+- \`/nan-forget health\` — Check if services are running
+- \`/nan-forget start\` — Start all services
+
+## Instructions
+
+Parse the subcommand from \`$ARGUMENTS\`. If empty or "sync", call \`memory_sync\`. Otherwise:
+
+- \`$ARGUMENTS\` = "clean" → call \`memory_clean\` tool, show results
+- \`$ARGUMENTS\` = "stats" → call \`memory_stats\` tool, show results
+- \`$ARGUMENTS\` = "compact" → call \`memory_consolidate\` tool, show results
+- \`$ARGUMENTS\` = "health" → call \`memory_health\` tool, show results
+- \`$ARGUMENTS\` = "start" → call \`memory_start\` tool, show results
+
+Always display the tool results directly to the user in a clean, readable format.
+`;
+    await writeFile(slashCommandDest, slashContent, 'utf-8');
+    console.log('  ✓ /nan-forget slash command installed globally');
+  }
+
+  // ── Step 9: Start REST API for non-MCP LLMs ──
+  const startApi = await prompt.ask('\nStart REST API for Codex/Cursor? (y/n)', 'y');
+  if (startApi.toLowerCase() === 'y') {
+    const { ok: apiOk } = run('npx nan-forget api &');
+    if (apiOk) {
+      console.log('  ✓ REST API running on http://localhost:3456');
+      console.log('    Get system prompt: nan-forget prompt');
+    }
+  }
 
   // ── Done ──
   console.log('\n🎉 Done. Restart Claude Code. That\'s it.\n');
