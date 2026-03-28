@@ -1,6 +1,6 @@
 {
   "name": "nan-forget",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "mcpName": "io.github.NaNMesh/nan-forget",
   "description": "Long-term memory for AI coding tools",
   "repository": {
