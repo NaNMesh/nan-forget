@@ -409,6 +409,41 @@ process.stdin.on('end', () => {
 
   await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
 
+  // Add memory_* tool permissions to global settings so users aren't prompted every time
+  const globalSettingsPath = join(homedir(), '.claude', 'settings.json');
+  const memoryPermissions = [
+    'mcp__nan-forget__memory_sync',
+    'mcp__nan-forget__memory_save',
+    'mcp__nan-forget__memory_search',
+    'mcp__nan-forget__memory_get',
+    'mcp__nan-forget__memory_update',
+    'mcp__nan-forget__memory_archive',
+    'mcp__nan-forget__memory_consolidate',
+    'mcp__nan-forget__memory_clean',
+    'mcp__nan-forget__memory_stats',
+    'mcp__nan-forget__memory_health',
+    'mcp__nan-forget__memory_start',
+  ];
+
+  try {
+    let globalSettings: Record<string, unknown> = {};
+    try {
+      const raw = await readFile(globalSettingsPath, 'utf-8');
+      globalSettings = JSON.parse(raw);
+    } catch { /* new file */ }
+
+    if (!globalSettings.permissions) globalSettings.permissions = {};
+    const perms = globalSettings.permissions as Record<string, unknown>;
+    const existing = (perms.allow ?? []) as string[];
+    const merged = [...new Set([...existing, ...memoryPermissions])];
+    perms.allow = merged;
+
+    await writeFile(globalSettingsPath, JSON.stringify(globalSettings, null, 2), 'utf-8');
+    console.log('  ✓ Memory tools auto-allowed (no permission prompts)');
+  } catch {
+    console.log('  ⚠ Could not update global settings — you may be prompted for memory tool permissions');
+  }
+
   // Copy CLAUDE.md to project root if not exists
   const claudeMdDest = join(projectDir, 'CLAUDE.md');
   const claudeMdSrc = join(resolve(__dirname, '..', '..'), 'CLAUDE.md');
@@ -578,7 +613,7 @@ Manual control for your AI long-term memory. Run without arguments to sync conte
 
 ## Usage
 
-- \`/nan-forget\` — Show memory stats and health
+- \`/nan-forget\` — Save session context to long-term memory + show stats
 - \`/nan-forget setup\` — Run full setup (Qdrant, Ollama, hooks, MCP)
 - \`/nan-forget clean\` — Run garbage collection on stale memories
 - \`/nan-forget stats\` — Show memory health (active, archived, by type/project)
@@ -591,7 +626,25 @@ Manual control for your AI long-term memory. Run without arguments to sync conte
 
 Parse the subcommand from \`$ARGUMENTS\`. Try the MCP tool first, fall back to CLI.
 
-**Default (no arguments):** Try \`memory_sync\` MCP tool. If not available, run \`npx nan-forget stats\` via Bash.
+**Default (no arguments):** Do both steps:
+
+1. **Sync:** Call \`memory_sync\` MCP tool (or \`npx nan-forget stats\` as fallback). Show the status to the user.
+2. **Save session context:** Review the ENTIRE current conversation and extract every piece of context worth persisting across sessions. Look for:
+   - Architecture or design decisions ("we chose X over Y because Z")
+   - User preferences or workflow habits
+   - Project facts: tech stack, APIs, deployment targets, team info
+   - Tasks completed, in progress, or planned
+   - Bugs found, root causes, fixes applied
+   - Configuration or environment details
+   - Any "we should remember this" moments
+
+   For each distinct piece of context, call \`memory_save\` with an appropriate type (fact, decision, preference, task, context) and the project name. Do NOT bundle multiple topics into one memory — save them individually so they're independently searchable.
+
+   After saving, tell the user how many memories were saved and list them briefly. Then show this tip:
+
+   > Tip: Use \`/nan-forget compact\` to consolidate related memories, or \`/nan-forget clean\` to remove stale ones.
+
+   If there's nothing worth saving (e.g., trivial conversation), say so — don't save junk.
 
 **Subcommands:**
 
@@ -604,6 +657,8 @@ Parse the subcommand from \`$ARGUMENTS\`. Try the MCP tool first, fall back to C
 - \`search <query>\` → try \`memory_search\` tool, else run \`npx nan-forget search "<query>"\` via Bash
 
 **Important:** If MCP tools (\`memory_*\`) are not available, always fall back to CLI commands. Never tell the user the command is broken — just use the CLI.
+
+For any unrecognized subcommand, show the usage list above.
 
 Always display results in a clean, readable format.
 `;
