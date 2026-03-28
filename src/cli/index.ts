@@ -305,6 +305,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
   archive: cmdArchive,
   clean: cmdClean,
   consolidate: cmdConsolidate,
+  compact: cmdConsolidate,
   stats: cmdStats,
   export: cmdExport,
 };
