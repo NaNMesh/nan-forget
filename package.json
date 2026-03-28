@@ -1,6 +1,6 @@
 {
   "name": "nan-forget",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "mcpName": "io.github.NaNMesh/nan-forget",
   "description": "Long-term memory for AI coding tools. Your AI remembers decisions, preferences, and context across sessions — automatically.",
   "repository": {
@@ -39,6 +39,10 @@
   "files": [
     "dist",
     "bin",
+    "src",
+    ".claude/commands",
+    "CLAUDE.md",
+    "docker-compose.yml",
     "README.md"
   ],
   "dependencies": {

@@ -315,6 +315,7 @@ NaN Forget — Long-term memory for AI coding tools
 Usage: nan-forget <command> [options]
 
 Commands:
+  setup              One-command setup (Docker, Qdrant, Ollama, hooks, MCP)
   add "text"         Save a memory
   search "query"     Search memories
   get <id>           Get memory by ID
@@ -328,6 +329,7 @@ Commands:
   serve              Start MCP server (stdio)
   api                Start REST API server
   start              Start all services (Qdrant + Ollama + API)
+  health             Check if services are running
   prompt             Print system prompt for non-MCP LLMs
 
 Options (vary by command):
@@ -377,6 +379,21 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
     const health = await checkHealth();
     const allUp = health.qdrant && health.ollama && health.api;
     console.log(allUp ? '\n  All services running.\n' : '\n  Some services failed. Check errors above.\n');
+    return;
+  }
+
+  if (command === 'setup') {
+    const { setup } = await import('../setup/index.js');
+    await setup();
+    return;
+  }
+
+  if (command === 'health') {
+    const { checkHealth } = await import('../services.js');
+    const health = await checkHealth();
+    console.log(`Qdrant:   ${health.qdrant ? '✓ running' : '✗ down'}`);
+    console.log(`Ollama:   ${health.ollama ? '✓ running' : '✗ down'}`);
+    console.log(`REST API: ${health.api ? '✓ running' : '✗ down'}`);
     return;
   }
 
