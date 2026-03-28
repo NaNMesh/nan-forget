@@ -1,0 +1,53 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.NaNMesh/nan-forget",
+  "description": "Long-term memory for AI coding tools via vector search (Qdrant).",
+  "repository": {
+    "url": "https://github.com/NaNMesh/nan-forget",
+    "source": "github"
+  },
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "nan-forget",
+      "version": "0.1.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "NAN_FORGET_QDRANT_URL",
+          "description": "Qdrant vector database URL",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "default": "http://localhost:6333"
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "description": "OpenAI API key for embeddings. If not set, falls back to local Ollama.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NAN_FORGET_EMBEDDING_PROVIDER",
+          "description": "Embedding provider: openai or ollama",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "default": "ollama"
+        },
+        {
+          "name": "NAN_FORGET_USER_ID",
+          "description": "User identifier for multi-user setups",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "default": "default"
+        }
+      ]
+    }
+  ]
+}
