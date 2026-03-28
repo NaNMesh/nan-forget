@@ -261,6 +261,46 @@ export async function cmdStats(_args: string[]): Promise<string> {
   return lines.join('\n');
 }
 
+export async function cmdRecent(_args: string[]): Promise<string> {
+  const { client, userId } = getClient();
+  const active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
+
+  const sorted = [...active].sort((a, b) =>
+    new Date(b.last_accessed ?? b.created_at).getTime() -
+    new Date(a.last_accessed ?? a.created_at).getTime()
+  );
+  const recent = sorted.slice(0, 10);
+
+  if (recent.length === 0) {
+    // Output hook-compatible JSON with no context
+    const output = {
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: 'NaN Forget: No memories saved yet. Use memory_save to start building long-term context.',
+      },
+    };
+    return JSON.stringify(output);
+  }
+
+  const lines = [
+    'NaN Forget — Recent Memory Context',
+    `${active.length} active memories. Here are the 10 most recent:`,
+    '',
+  ];
+  for (const m of recent) {
+    lines.push(`- [${m.type}] ${m.project}: ${m.summary}`);
+  }
+  lines.push('', 'Use memory_search to dive deeper into any topic. Use memory_save to persist new context.');
+
+  const output = {
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: lines.join('\n'),
+    },
+  };
+  return JSON.stringify(output);
+}
+
 export async function cmdConsolidate(args: string[]): Promise<string> {
   const { values } = parseArgs({
     args,
@@ -306,6 +346,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
   clean: cmdClean,
   consolidate: cmdConsolidate,
   compact: cmdConsolidate,
+  recent: cmdRecent,
   stats: cmdStats,
   export: cmdExport,
 };

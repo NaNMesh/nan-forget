@@ -438,8 +438,22 @@ process.stdin.on('end', () => {
     const merged = [...new Set([...existing, ...memoryPermissions])];
     perms.allow = merged;
 
+    // Add SessionStart hook to auto-load memory context
+    if (!globalSettings.hooks) globalSettings.hooks = {};
+    const hooks = globalSettings.hooks as Record<string, unknown[]>;
+    if (!hooks.SessionStart) {
+      hooks.SessionStart = [{
+        hooks: [{
+          type: 'command',
+          command: 'npx nan-forget recent',
+          timeout: 10,
+        }],
+      }];
+    }
+
     await writeFile(globalSettingsPath, JSON.stringify(globalSettings, null, 2), 'utf-8');
     console.log('  ✓ Memory tools auto-allowed (no permission prompts)');
+    console.log('  ✓ SessionStart hook installed (memory context auto-loads)');
   } catch {
     console.log('  ⚠ Could not update global settings — you may be prompted for memory tool permissions');
   }

@@ -442,7 +442,7 @@ export function createServer(deps?: ServerDeps) {
   // ═══════════════════════════════════════
   server.tool(
     'memory_sync',
-    'IMPORTANT: Call this ONCE at the start of every session. Lightweight handshake — checks if services are running, reports how many memories are available, and triggers background consolidation if needed. Does NOT search — use memory_search dynamically during conversation when specific topics come up. If services are down, ask the user to start them via memory_start.',
+    'IMPORTANT: Call this ONCE at the start of every session. Lightweight handshake — checks if services are running, reports how many memories are available, and shows recent memory summaries so you know what context exists. If services are down, ask the user to start them via memory_start.',
     {},
     async () => {
       await ensureCollection(client, embedder.provider);
@@ -484,8 +484,22 @@ export function createServer(deps?: ServerDeps) {
         parts.push('*Background consolidation triggered.*');
       }
 
+      // 4. Recent context — show summaries of most recently accessed memories
+      const sorted = [...active].sort((a, b) =>
+        new Date(b.last_accessed ?? b.created_at).getTime() -
+        new Date(a.last_accessed ?? a.created_at).getTime()
+      );
+      const recent = sorted.slice(0, 10);
+      if (recent.length > 0) {
+        parts.push('## Recent Context');
+        for (const m of recent) {
+          parts.push(`- [${m.type}] ${m.project}: ${m.summary}`);
+        }
+        parts.push('');
+      }
+
       parts.push('## Ready');
-      parts.push('Long-term memory is online. Use memory_search when you encounter topics that may have prior context. Use memory_save whenever you learn something worth remembering.');
+      parts.push('Long-term memory is online. Use memory_search to dive deeper into any topic above. Use memory_save whenever you learn something worth remembering.');
 
       return {
         content: [{ type: 'text' as const, text: parts.join('\n') }],
