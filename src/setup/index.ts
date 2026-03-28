@@ -99,10 +99,22 @@ async function ensureQdrant(url: string): Promise<boolean> {
   }
 
   console.log('  Starting Qdrant...');
-  const { ok } = run('docker compose up -d');
+  // Use docker run directly — works from any directory, no docker-compose needed
+  const { ok } = run(
+    'docker run -d --name nan-forget-qdrant ' +
+    '-p 6333:6333 -p 6334:6334 ' +
+    '-v nan-forget-qdrant-data:/qdrant/storage ' +
+    '--restart unless-stopped ' +
+    'qdrant/qdrant:v1.13.2'
+  );
   if (!ok) {
-    console.log('  ✗ Failed to start Qdrant. Run manually: docker compose up -d');
-    return false;
+    // Container might already exist but be stopped
+    const { ok: restarted } = run('docker start nan-forget-qdrant');
+    if (!restarted) {
+      console.log('  ✗ Failed to start Qdrant. Run manually:');
+      console.log('    docker run -d --name nan-forget-qdrant -p 6333:6333 -v nan-forget-qdrant-data:/qdrant/storage --restart unless-stopped qdrant/qdrant:v1.13.2');
+      return false;
+    }
   }
 
   // Wait for Qdrant to be ready
@@ -113,7 +125,7 @@ async function ensureQdrant(url: string): Promise<boolean> {
       return true;
     }
   }
-  console.log('  ✗ Qdrant did not start within 15s. Check: docker compose logs');
+  console.log('  ✗ Qdrant did not start within 15s. Check: docker logs nan-forget-qdrant');
   return false;
 }
 
