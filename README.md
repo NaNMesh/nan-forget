@@ -36,6 +36,46 @@ flowchart LR
 
 ---
 
+## Automatic Memory Handling
+
+You never call save or search manually. Here's what happens behind the scenes:
+
+### Claude Code (fully automatic)
+
+| Event | What fires | What happens |
+|-------|-----------|--------------|
+| Session starts | `memory_sync` | Lightweight handshake — checks health, loads stats, lists projects. No heavy search. |
+| You discuss a topic | `memory_search` | Claude searches the DB dynamically whenever relevant context might exist — like how you recall things on-demand. |
+| Claude learns something | `memory_save` | Claude saves decisions, preferences, and facts to Qdrant immediately. Tool descriptions tell Claude "you MUST call this." |
+| Claude writes a `.md` file | PostToolUse hook | `memory-sync.js` intercepts the write, parses frontmatter, and auto-saves it to Qdrant via `nan-forget add`. |
+| Session ends | SessionEnd hook | `session-end.js` scans the conversation transcript for unsaved decisions/facts and saves the top 5 to the DB. |
+| Every 10 saves or 24h | Auto-consolidate | Aging memories get clustered and compacted into long-term entries. Originals are archived. |
+
+Three layers of protection ensure nothing is lost:
+1. **Claude saves proactively** (directive tool descriptions)
+2. **Hook catches .md writes** (PostToolUse intercept)
+3. **End-of-session sweep** (SessionEnd transcript scan)
+
+### Other LLMs (Codex, Cursor, etc.)
+
+Other LLMs don't have MCP or hooks. Instead:
+
+1. **Get the system prompt**: `nan-forget prompt` or `GET /memories/instructions`
+2. **Paste it into your LLM's system prompt**. It tells the LLM to call the REST API for save/search/sync.
+3. **The LLM calls the REST API** at `localhost:3456` during conversation.
+
+The REST API mirrors all 10 MCP tools. Same database, same retrieval pipeline, same consolidation. Memories saved by Claude are searchable from Codex and vice versa.
+
+```bash
+# Start the REST API
+nan-forget api
+
+# The system prompt tells your LLM exactly what endpoints to call
+nan-forget prompt
+```
+
+---
+
 ## Slash Commands
 
 Type these in Claude Code:
@@ -172,7 +212,7 @@ flowchart TB
 
 | Tool | Purpose |
 |------|---------|
-| `memory_sync` | All-in-one session start: load context + check health + consolidate |
+| `memory_sync` | Lightweight session handshake: health check + stats + project list |
 | `memory_save` | Save a memory (auto-called by Claude, proactively) |
 | `memory_search` | Semantic search with 3-stage retrieval (depth 1-3) |
 | `memory_get` | Fetch a specific memory by ID |
