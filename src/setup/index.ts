@@ -223,7 +223,7 @@ async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<st
   if (hasClaude) {
     // Remove old entry first (ignore errors if not exists)
     run('claude mcp remove nan-forget 2>/dev/null');
-    const { ok } = run('claude mcp add nan-forget -- npx nan-forget serve');
+    const { ok } = run('claude mcp add nan-forget -s user -- npx nan-forget serve');
     if (ok) {
       return 'Claude Code MCP (via claude mcp add)';
     }
