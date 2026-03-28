@@ -301,6 +301,64 @@ export async function cmdRecent(_args: string[]): Promise<string> {
   return JSON.stringify(output);
 }
 
+export async function cmdRecall(_args: string[]): Promise<string> {
+  // Read user prompt from stdin (UserPromptSubmit hook sends JSON)
+  const chunks: string[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk.toString());
+  }
+  const raw = chunks.join('');
+
+  let query = '';
+  try {
+    const data = JSON.parse(raw);
+    // UserPromptSubmit hook input has user_message or content
+    query = data.user_message ?? data.content ?? '';
+  } catch {
+    // Plain text fallback
+    query = raw.trim();
+  }
+
+  if (!query || query.length < 5) {
+    // Too short to search — skip silently
+    return JSON.stringify({});
+  }
+
+  try {
+    const { client, embedder, userId } = getClient();
+    await ensureCollection(client, embedder.provider);
+
+    const result = await retrieve(client, embedder, query, {
+      user_id: userId,
+    }, { maxStage: 1, limit: 3 });
+
+    // Only inject context if we have relevant matches (score > 0.3)
+    // Ollama nomic-embed-text gives lower cosine scores than OpenAI
+    const relevant = result.recognition.filter(r => r.adjusted_score > 0.3);
+    if (relevant.length === 0) {
+      return JSON.stringify({});
+    }
+
+    const lines = [
+      'NaN Forget — Relevant memories for this message:',
+    ];
+    for (const r of relevant) {
+      lines.push(`- [${r.type}] ${r.summary}`);
+    }
+    lines.push('', 'Call memory_search for full details on any of these topics.');
+
+    return JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'UserPromptSubmit',
+        additionalContext: lines.join('\n'),
+      },
+    });
+  } catch {
+    // Services down — fail silently
+    return JSON.stringify({});
+  }
+}
+
 export async function cmdConsolidate(args: string[]): Promise<string> {
   const { values } = parseArgs({
     args,
@@ -347,6 +405,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
   consolidate: cmdConsolidate,
   compact: cmdConsolidate,
   recent: cmdRecent,
+  recall: cmdRecall,
   stats: cmdStats,
   export: cmdExport,
 };

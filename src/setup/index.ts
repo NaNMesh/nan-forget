@@ -450,6 +450,15 @@ process.stdin.on('end', () => {
         }],
       }];
     }
+    if (!hooks.UserPromptSubmit) {
+      hooks.UserPromptSubmit = [{
+        hooks: [{
+          type: 'command',
+          command: 'npx nan-forget recall',
+          timeout: 5,
+        }],
+      }];
+    }
 
     await writeFile(globalSettingsPath, JSON.stringify(globalSettings, null, 2), 'utf-8');
     console.log('  ✓ Memory tools auto-allowed (no permission prompts)');
