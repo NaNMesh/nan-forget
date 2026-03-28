@@ -72,7 +72,7 @@ describe('MCP Server', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('lists all 8 tools', async () => {
+  it('lists all 11 tools', async () => {
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name);
     expect(names).toContain('memory_save');
@@ -83,7 +83,10 @@ describe('MCP Server', () => {
     expect(names).toContain('memory_consolidate');
     expect(names).toContain('memory_clean');
     expect(names).toContain('memory_stats');
-    expect(names).toHaveLength(8);
+    expect(names).toContain('memory_health');
+    expect(names).toContain('memory_start');
+    expect(names).toContain('memory_sync');
+    expect(names).toHaveLength(11);
   });
 
   it('memory_save creates a memory', async () => {
@@ -215,5 +218,42 @@ describe('MCP Server', () => {
     const text = (result.content as { type: string; text: string }[])[0].text;
     // Depth 1 = recognition only, should have score info
     expect(text.length).toBeGreaterThan(0);
+  });
+
+  it('memory_sync returns lightweight handshake', async () => {
+    const result = await client.callTool({
+      name: 'memory_sync',
+      arguments: {},
+    });
+
+    const text = (result.content as { type: string; text: string }[])[0].text;
+    expect(text).toContain('NaN Forget');
+    expect(text).toContain('Services');
+    expect(text).toContain('Memory Bank');
+    expect(text).toContain('Ready');
+  });
+
+  it('memory_health returns service status', async () => {
+    const result = await client.callTool({
+      name: 'memory_health',
+      arguments: {},
+    });
+
+    const text = (result.content as { type: string; text: string }[])[0].text;
+    expect(text).toContain('Qdrant');
+    expect(text).toContain('Ollama');
+    expect(text).toContain('REST API');
+  });
+
+  it('memory_stats returns counts', async () => {
+    const result = await client.callTool({
+      name: 'memory_stats',
+      arguments: {},
+    });
+
+    const text = (result.content as { type: string; text: string }[])[0].text;
+    expect(text).toContain('Active');
+    expect(text).toContain('By type');
+    expect(text).toContain('By project');
   });
 });

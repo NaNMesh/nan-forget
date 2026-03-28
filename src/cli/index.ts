@@ -15,6 +15,7 @@
  *   nan-forget export
  *   nan-forget serve   (start MCP server on stdio)
  *   nan-forget api     (start REST API server)
+ *   nan-forget start   (start all services)
  */
 
 import { parseArgs } from 'node:util';
@@ -326,6 +327,8 @@ Commands:
   export             Export all memories as JSON
   serve              Start MCP server (stdio)
   api                Start REST API server
+  start              Start all services (Qdrant + Ollama + API)
+  prompt             Print system prompt for non-MCP LLMs
 
 Options (vary by command):
   -t, --type         fact|decision|preference|task|context
@@ -361,6 +364,26 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
     const { startApiServer } = await import('../api/server.js');
     const port = parseInt(args[0] ?? process.env.NAN_FORGET_API_PORT ?? '3456', 10);
     startApiServer(port);
+    return;
+  }
+
+  if (command === 'start') {
+    const { startAll, checkHealth } = await import('../services.js');
+    console.log('\nNaN Forget — Starting Services\n');
+    const result = await startAll();
+    console.log(`  Qdrant:   ${result.qdrant.started ? '✓ running' : '✗ ' + (result.qdrant.error ?? 'failed')}`);
+    console.log(`  Ollama:   ${result.ollama.started ? '✓ running' : '✗ ' + (result.ollama.error ?? 'failed')}`);
+    console.log(`  REST API: ${result.api.started ? '✓ running' : '✗ ' + (result.api.error ?? 'failed')}`);
+    const health = await checkHealth();
+    const allUp = health.qdrant && health.ollama && health.api;
+    console.log(allUp ? '\n  All services running.\n' : '\n  Some services failed. Check errors above.\n');
+    return;
+  }
+
+  if (command === 'prompt') {
+    const { getSystemPrompt } = await import('../api/server.js');
+    const host = args[0] ?? `http://localhost:${process.env.NAN_FORGET_API_PORT ?? '3456'}`;
+    console.log(getSystemPrompt(host));
     return;
   }
 

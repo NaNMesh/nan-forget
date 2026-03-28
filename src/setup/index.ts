@@ -14,8 +14,12 @@
 
 import { createInterface } from 'node:readline';
 import { readFile, writeFile, mkdir, access, copyFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import { execSync } from 'node:child_process';
 import { createQdrantClient, ensureCollection } from '../qdrant.js';
 import { createEmbedder } from '../embeddings.js';
@@ -255,6 +259,152 @@ async function ensureDotEnv(provider: string, openaiKey: string): Promise<void> 
   await writeFile(envPath, lines.join('\n') + '\n', 'utf-8');
 }
 
+// --- Hooks + CLAUDE.md ---
+
+async function installHooksAndClaudeMd(): Promise<void> {
+  const projectDir = process.cwd();
+  const claudeDir = join(projectDir, '.claude');
+  const hooksDir = join(claudeDir, 'hooks');
+
+  await mkdir(hooksDir, { recursive: true });
+
+  // Write Node.js hook
+  const hookContent = `#!/usr/bin/env node
+import { readFileSync } from 'fs';
+import { execFile } from 'child_process';
+
+let input = '';
+process.stdin.setEncoding('utf-8');
+process.stdin.on('data', (chunk) => { input += chunk; });
+process.stdin.on('end', () => {
+  try {
+    const data = JSON.parse(input);
+    const filePath = data?.tool_input?.file_path ?? '';
+    if (!filePath || !filePath.includes('/memory/') || !filePath.endsWith('.md')) process.exit(0);
+    let content;
+    try { content = readFileSync(filePath, 'utf-8'); } catch { process.exit(0); }
+    const parts = content.split('---');
+    if (parts.length < 3) process.exit(0);
+    const frontmatter = parts[1];
+    const body = parts.slice(2).join('---').trim();
+    if (!body) process.exit(0);
+    const typeMatch = frontmatter.match(/^type:\\s*(.+)$/m);
+    const rawType = typeMatch?.[1]?.trim() ?? 'fact';
+    const typeMap = { user: 'fact', feedback: 'preference', project: 'context', reference: 'fact' };
+    const nfType = typeMap[rawType] ?? 'fact';
+    let project = '_global';
+    const projectMatch = filePath.match(/\\/projects\\/([^/]+)\\//);
+    if (projectMatch) { const s = projectMatch[1].split('-'); project = s[s.length - 1] || '_global'; }
+    execFile('npx', ['nan-forget', 'add', body.slice(0, 2000), '--type', nfType, '--project', project, '--tags', 'auto-sync,claude-memory'], { timeout: 15000 }, () => {});
+  } catch {}
+  process.exit(0);
+});
+`;
+
+  await writeFile(join(hooksDir, 'memory-sync.js'), hookContent, 'utf-8');
+  run(`chmod +x "${join(hooksDir, 'memory-sync.js')}"`);
+
+  // Write session-end hook (saves unsaved context when session closes)
+  const sessionEndContent = `#!/usr/bin/env node
+import { readFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+const PATTERNS = [
+  { pattern: /\\b(decided|chose|switched to|went with|using .+ instead of)\\b/i, type: 'decision' },
+  { pattern: /\\b(prefer|always use|never use|convention is)\\b/i, type: 'preference' },
+  { pattern: /\\b(tech stack|framework|database|deploy|hosting|endpoint)\\b/i, type: 'fact' },
+  { pattern: /\\b(TODO|need to|should|must|next step|blocked)\\b/i, type: 'task' },
+  { pattern: /\\b(working on|currently|in progress|building|implementing)\\b/i, type: 'context' },
+];
+let input = '';
+process.stdin.setEncoding('utf-8');
+process.stdin.on('data', (c) => { input += c; });
+process.stdin.on('end', () => {
+  try {
+    const data = JSON.parse(input);
+    const tp = data?.transcript_path;
+    if (!tp) process.exit(0);
+    let lines;
+    try { lines = readFileSync(tp, 'utf-8').split('\\n').filter(Boolean).map(l => JSON.parse(l)); } catch { process.exit(0); }
+    const msgs = lines.filter(l => l.role === 'assistant' && typeof l.content === 'string').slice(-20);
+    const project = (data?.cwd ?? '').split('/').pop() || '_global';
+    const toSave = []; const seen = new Set();
+    for (const msg of msgs) {
+      const sentences = (msg.content || '').split(/[.!?\\n]/).filter(s => s.trim().length > 15 && s.trim().length < 500);
+      for (const s of sentences) {
+        const t = s.trim();
+        for (const { pattern, type } of PATTERNS) {
+          if (pattern.test(t) && !seen.has(t.slice(0, 50))) { seen.add(t.slice(0, 50)); toSave.push({ content: t, type }); break; }
+        }
+      }
+    }
+    for (const item of toSave.slice(-5)) {
+      try { execFileSync('npx', ['nan-forget', 'add', item.content, '--type', item.type, '--project', project, '--tags', 'auto-save,session-end'], { timeout: 10000, stdio: 'ignore' }); } catch {}
+    }
+  } catch {}
+  process.exit(0);
+});
+`;
+
+  await writeFile(join(hooksDir, 'session-end.js'), sessionEndContent, 'utf-8');
+  run(`chmod +x "${join(hooksDir, 'session-end.js')}"`);
+
+  // Write settings.json with hook config
+  const settingsPath = join(claudeDir, 'settings.json');
+  const settings = {
+    hooks: {
+      PostToolUse: [{
+        matcher: 'Write|Edit',
+        hooks: [{
+          type: 'command',
+          command: `node "$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-sync.js`,
+          timeout: 10,
+        }],
+      }],
+      SessionEnd: [{
+        hooks: [{
+          type: 'command',
+          command: `node "$CLAUDE_PROJECT_DIR"/.claude/hooks/session-end.js`,
+          timeout: 30,
+        }],
+      }],
+    },
+  };
+
+  await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+
+  // Copy CLAUDE.md to project root if not exists
+  const claudeMdDest = join(projectDir, 'CLAUDE.md');
+  const claudeMdSrc = join(resolve(__dirname, '..', '..'), 'CLAUDE.md');
+  try {
+    await access(claudeMdDest);
+    // Already exists, don't overwrite
+  } catch {
+    try {
+      await copyFile(claudeMdSrc, claudeMdDest);
+    } catch {
+      // Source doesn't exist (installed via npm), write inline
+      const claudeMd = `# NaN Forget — AI Long-Term Memory (MANDATORY)
+
+## Rules (Non-Negotiable)
+
+1. At session start: You MUST call memory_sync with the current project name.
+2. During the session: You MUST call memory_save immediately whenever you learn a decision, preference, fact, or context.
+3. If services are down: Ask the user, then call memory_start.
+
+## What to Save
+
+- Architecture decisions, user preferences, project facts, context, tasks
+- Rule: if it would be useful in a future session, save it NOW.
+
+## Context Management
+
+Fully automatic. Consolidation and cleanup run after every 10 saves.
+`;
+      await writeFile(claudeMdDest, claudeMd, 'utf-8');
+    }
+  }
+}
+
 // --- Main ---
 
 export async function setup(): Promise<void> {
@@ -352,15 +502,29 @@ export async function setup(): Promise<void> {
     console.log(`  ✓ MEMORY.md created (${memState.lines.length} entries)`);
   }
 
-  // ── Step 5: Write configs ──
+  // ── Step 5: Docker restart policy ──
+  run('docker update --restart=always nan-forget-qdrant');
+  console.log('  ✓ Qdrant set to auto-start on reboot');
+
+  // ── Step 6: Write configs ──
   const configPath = await writeMcpConfig(provider, openaiKey);
   console.log(`  ✓ MCP config → ${configPath}`);
 
   await ensureDotEnv(provider, openaiKey);
   console.log('  ✓ .env created');
 
+  // ── Step 7: Install Claude Code hooks + CLAUDE.md ──
+  await installHooksAndClaudeMd();
+  console.log('  ✓ Claude Code hooks installed');
+  console.log('  ✓ CLAUDE.md created');
+
   // ── Done ──
-  console.log('\n🎉 Done. Restart Claude Code to activate.\n');
+  console.log('\n🎉 Done. Restart Claude Code. That\'s it.\n');
+  console.log('nan-forget will automatically:');
+  console.log('  • Load context from past sessions on startup');
+  console.log('  • Save decisions, preferences, and facts as you work');
+  console.log('  • Consolidate and clean memories in the background');
+  console.log('  • Share memories across all AI tools (Claude, Codex, etc.)\n');
 
   if (memories.length > 0) {
     console.log('Try it:');

@@ -2,8 +2,8 @@
 /**
  * NaN Forget MCP Server
  *
- * 8 tools: memory_save, memory_search, memory_get, memory_update, memory_archive,
- *          memory_consolidate, memory_clean, memory_stats
+ * 11 tools: memory_save, memory_search, memory_get, memory_update, memory_archive,
+ *           memory_consolidate, memory_clean, memory_stats, memory_health, memory_start, memory_sync
  * Runs over stdio. Connects to local Qdrant.
  */
 
@@ -11,6 +11,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories } from '../qdrant.js';
+import { checkHealth, startAll } from '../services.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
@@ -59,7 +60,7 @@ export function createServer(deps?: ServerDeps) {
 
   const server = new McpServer({
     name: 'nan-forget',
-    version: '0.1.1',
+    version: '0.3.0',
   });
 
   // ═══════════════════════════════════════
@@ -67,7 +68,7 @@ export function createServer(deps?: ServerDeps) {
   // ═══════════════════════════════════════
   server.tool(
     'memory_save',
-    'Save a memory to long-term storage. Use this when you learn something worth remembering: decisions, preferences, facts, context, or tasks. Deduplicates automatically — safe to call even if you think it might already exist.',
+    'IMPORTANT: You MUST call this tool proactively whenever you learn a decision, preference, fact, or context worth remembering across sessions. Do NOT wait for the user to ask you to save — save immediately as you learn it. Examples: architecture decisions, tech stack choices, user preferences, project context, deployment configs, coding conventions. Deduplicates automatically — safe to call even if it might already exist.',
     {
       content: z.string().describe('The full text of the memory to save'),
       type: z.enum(['fact', 'decision', 'preference', 'task', 'context']).describe('Memory type'),
@@ -129,7 +130,7 @@ export function createServer(deps?: ServerDeps) {
   // ═══════════════════════════════════════
   server.tool(
     'memory_search',
-    'Search your long-term memory. Use this when you need project context, past decisions, preferences, or facts from previous sessions. Returns memories ranked by relevance and recency. Depth 1 = fast blur (summaries only), depth 2 = full content, depth 3 = full + associated memories.',
+    'IMPORTANT: Call this DURING the conversation whenever you encounter a topic that may have prior context — auth, deployment, testing, architecture, tooling, etc. Do NOT wait for the user to ask. If the topic might have been discussed in any past session or project, search for it. Searches across ALL projects automatically — decisions from Project A surface in Project B. This is your long-term memory. Use it like you would use your own recall. Depth 1 = summaries, depth 2 = full content, depth 3 = full + associated memories.',
     {
       query: z.string().describe('What you want to remember — a question or topic'),
       project: z.string().optional().describe('Limit search to a specific project'),
@@ -371,6 +372,123 @@ export function createServer(deps?: ServerDeps) {
 
       return {
         content: [{ type: 'text' as const, text: lines.join('\n') }],
+      };
+    }
+  );
+
+  // ═══════════════════════════════════════
+  // Tool 9: memory_health
+  // ═══════════════════════════════════════
+  server.tool(
+    'memory_health',
+    'Check if nan-forget services are running (Qdrant, Ollama, REST API). Call this at the start of each session to verify everything is ready. If services are down, ask the user if they want to start them, then call memory_start.',
+    {},
+    async () => {
+      const status = await checkHealth();
+      const lines = [
+        'NaN Forget — Service Health',
+        '',
+        `Qdrant:   ${status.qdrant ? '✓ running' : '✗ down'}`,
+        `Ollama:   ${status.ollama ? '✓ running' : '✗ down'}`,
+        `REST API: ${status.api ? '✓ running' : '✗ down'}`,
+      ];
+
+      const allUp = status.qdrant && status.ollama && status.api;
+      if (!allUp) {
+        lines.push('', 'Some services are down. Ask the user if they want to start them, then call memory_start.');
+      } else {
+        lines.push('', 'All services healthy. Memory system ready.');
+      }
+
+      return {
+        content: [{ type: 'text' as const, text: lines.join('\n') }],
+      };
+    }
+  );
+
+  // ═══════════════════════════════════════
+  // Tool 10: memory_start
+  // ═══════════════════════════════════════
+  server.tool(
+    'memory_start',
+    'Start all nan-forget services (Qdrant, Ollama, REST API). Only call this after the user confirms they want services started. Starts Docker containers, Ollama, and the REST API.',
+    {},
+    async () => {
+      const result = await startAll();
+
+      const lines = [
+        'NaN Forget — Starting Services',
+        '',
+        `Qdrant:   ${result.qdrant.started ? '✓ started' : '✗ ' + (result.qdrant.error ?? 'failed')}`,
+        `Ollama:   ${result.ollama.started ? '✓ started' : '✗ ' + (result.ollama.error ?? 'failed')}`,
+        `REST API: ${result.api.started ? '✓ started' : '✗ ' + (result.api.error ?? 'failed')}`,
+      ];
+
+      const allUp = result.qdrant.started && result.ollama.started && result.api.started;
+      if (allUp) {
+        lines.push('', 'All services running. Memory system ready.');
+      } else {
+        lines.push('', 'Some services failed to start. Check the errors above.');
+      }
+
+      return {
+        content: [{ type: 'text' as const, text: lines.join('\n') }],
+      };
+    }
+  );
+
+  // ═══════════════════════════════════════
+  // Tool 11: memory_sync
+  // ═══════════════════════════════════════
+  server.tool(
+    'memory_sync',
+    'IMPORTANT: Call this ONCE at the start of every session. Lightweight handshake — checks if services are running, reports how many memories are available, and triggers background consolidation if needed. Does NOT search — use memory_search dynamically during conversation when specific topics come up. If services are down, ask the user to start them via memory_start.',
+    {},
+    async () => {
+      await ensureCollection(client, embedder.provider);
+
+      const parts: string[] = ['# NaN Forget — Ready\n'];
+
+      // 1. Health check
+      const health = await checkHealth();
+      const allUp = health.qdrant && (health.ollama || !!OPENAI_API_KEY);
+      parts.push(`## Services`);
+      parts.push(`Qdrant: ${health.qdrant ? '✓' : '✗'} | Ollama: ${health.ollama ? '✓' : '✗'} | API: ${health.api ? '✓' : '✗'}`);
+      if (!allUp) {
+        parts.push('\nSome services are down. Ask the user if they want to start them, then call memory_start.');
+      }
+      parts.push('');
+
+      // 2. Stats (lightweight — just counts)
+      const active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
+      const byProject: Record<string, number> = {};
+      for (const m of active) {
+        byProject[m.project] = (byProject[m.project] ?? 0) + 1;
+      }
+      parts.push(`## Memory Bank`);
+      parts.push(`${active.length} active memories across ${Object.keys(byProject).length} project(s)`);
+      if (Object.keys(byProject).length > 0) {
+        parts.push('Projects: ' + Object.entries(byProject).map(([p, c]) => `${p} (${c})`).join(', '));
+      }
+      parts.push('');
+
+      // 3. Auto-consolidate if needed (background, non-blocking)
+      const hoursSinceClean = (Date.now() - lastConsolidateAt) / (1000 * 60 * 60);
+      if (savesSinceConsolidate >= 10 || hoursSinceClean >= 24) {
+        savesSinceConsolidate = 0;
+        lastConsolidateAt = Date.now();
+        consolidate(client, embedder, userId, { project_root: projectRoot })
+          .then(() => clean(client, embedder, userId, { project_root: projectRoot }))
+          .then(() => console.error('Auto-consolidate + clean completed'))
+          .catch((err) => console.error('Auto-consolidate failed:', err));
+        parts.push('*Background consolidation triggered.*');
+      }
+
+      parts.push('## Ready');
+      parts.push('Long-term memory is online. Use memory_search when you encounter topics that may have prior context. Use memory_save whenever you learn something worth remembering.');
+
+      return {
+        content: [{ type: 'text' as const, text: parts.join('\n') }],
       };
     }
   );

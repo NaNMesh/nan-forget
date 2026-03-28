@@ -8,7 +8,7 @@
  */
 
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories } from '../qdrant.js';
+import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories, searchMemories } from '../qdrant.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
@@ -153,6 +153,31 @@ export function startApiServer(port = PORT) {
         return json(res, result);
       }
 
+      // POST /memories/sync — lightweight handshake (health + stats, no search)
+      if (method === 'POST' && path === '/memories/sync') {
+        const active = await scrollMemories(client, { user_id: USER_ID, status: 'active' }, 1000);
+        const byProject: Record<string, number> = {};
+        for (const m of active) {
+          byProject[m.project] = (byProject[m.project] ?? 0) + 1;
+        }
+
+        return json(res, {
+          status: 'ready',
+          active_memories: active.length,
+          projects: byProject,
+          message: 'Long-term memory online. Use GET /memories/search?q=<topic> during conversation for dynamic recall.',
+        });
+      }
+
+      // GET /memories/instructions — system prompt for non-MCP LLMs
+      if (method === 'GET' && path === '/memories/instructions') {
+        const port = url.port || '3456';
+        const host = `http://localhost:${port}`;
+        res.writeHead(200, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
+        res.end(getSystemPrompt(host));
+        return;
+      }
+
       // POST /memories/clean
       if (method === 'POST' && path === '/memories/clean') {
         const result = await clean(client, embedder, USER_ID, {
@@ -215,11 +240,39 @@ export function startApiServer(port = PORT) {
     console.error('  PATCH  /memories/:id           — update');
     console.error('  DELETE /memories/:id           — archive');
     console.error('  POST   /memories/consolidate   — consolidate aging memories');
+    console.error('  POST   /memories/sync           — all-in-one context loader');
     console.error('  POST   /memories/clean         — garbage collection');
     console.error('  GET    /memories/stats          — memory stats');
+    console.error('  GET    /memories/instructions   — system prompt for LLMs');
   });
 
   return server;
+}
+
+// --- System Prompt for Non-MCP LLMs ---
+
+export function getSystemPrompt(host = 'http://localhost:3456'): string {
+  return `You have access to a long-term memory system at ${host}. You MUST follow these rules:
+
+1. AT SESSION START: Call POST ${host}/memories/sync to verify the memory system is online. This returns how many memories exist and which projects are tracked. It does NOT search — searching happens dynamically.
+
+2. DURING THE SESSION — SEARCH: Whenever you encounter a topic that may have prior context (auth, deployment, testing, architecture, tooling, etc.), call GET ${host}/memories/search?q=<topic> IMMEDIATELY. Do NOT wait for the user to ask. Think of this as your long-term recall — use it whenever a topic might have been discussed before, in ANY project.
+
+3. DURING THE SESSION — SAVE: Call POST ${host}/memories with {"content": "<what you learned>", "type": "<fact|decision|preference|task|context>", "project": "<project name>"} immediately whenever you learn a decision, preference, fact, or context worth remembering. Do NOT wait. Save as you go.
+
+API Reference:
+  POST   ${host}/memories              — Save a memory {content, type, project, tags?}
+  POST   ${host}/memories/sync         — Load session context {project?, query?}
+  GET    ${host}/memories/search?q=... — Search memories
+  GET    ${host}/memories/:id          — Get by ID
+  PATCH  ${host}/memories/:id          — Update {content?, type?, tags?}
+  DELETE ${host}/memories/:id          — Archive (soft delete)
+  POST   ${host}/memories/consolidate  — Compact aging memories (usually automatic)
+  POST   ${host}/memories/clean        — Garbage collection (usually automatic)
+  GET    ${host}/memories/stats        — Memory health metrics
+
+Memory types: fact, decision, preference, task, context
+Context management is automatic — consolidation and cleanup happen after every 10 saves.`;
 }
 
 // --- Main ---
