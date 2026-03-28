@@ -60,7 +60,7 @@ export function createServer(deps?: ServerDeps) {
 
   const server = new McpServer({
     name: 'nan-forget',
-    version: '0.3.3',
+    version: '0.3.4',
   });
 
   // ═══════════════════════════════════════

@@ -105,14 +105,14 @@ async function ensureQdrant(url: string): Promise<boolean> {
     '-p 6333:6333 -p 6334:6334 ' +
     '-v nan-forget-qdrant-data:/qdrant/storage ' +
     '--restart unless-stopped ' +
-    'qdrant/qdrant:v1.13.2'
+    'qdrant/qdrant:v1.17.1'
   );
   if (!ok) {
     // Container might already exist but be stopped
     const { ok: restarted } = run('docker start nan-forget-qdrant');
     if (!restarted) {
       console.log('  ✗ Failed to start Qdrant. Run manually:');
-      console.log('    docker run -d --name nan-forget-qdrant -p 6333:6333 -v nan-forget-qdrant-data:/qdrant/storage --restart unless-stopped qdrant/qdrant:v1.13.2');
+      console.log('    docker run -d --name nan-forget-qdrant -p 6333:6333 -v nan-forget-qdrant-data:/qdrant/storage --restart unless-stopped qdrant/qdrant:v1.17.1');
       return false;
     }
   }

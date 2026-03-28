@@ -1,6 +1,6 @@
 services:
   qdrant:
-    image: qdrant/qdrant:v1.13.2
+    image: qdrant/qdrant:v1.17.1
     container_name: nan-forget-qdrant
     ports:
       - "6333:6333"   # REST API
