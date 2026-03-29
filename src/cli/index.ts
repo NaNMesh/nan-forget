@@ -330,7 +330,7 @@ export async function cmdRecall(_args: string[]): Promise<string> {
     query = raw.trim();
   }
 
-  if (!query || query.length < 5) {
+  if (!query || query.length < 3) {
     // Too short to search — skip silently
     return JSON.stringify({});
   }
