@@ -301,7 +301,7 @@ All data lives in a single SQLite file at `~/.nan-forget/memories.db`. No Docker
 
 ```mermaid
 flowchart TB
-    A["New memory saved"] --> B["Active in Qdrant<br/>Searchable, scored"]
+    A["New memory saved"] --> B["Active in SQLite<br/>Searchable, scored"]
     B --> C{"Accessed<br/>recently?"}
     C -->|"Yes"| D["Score stays high<br/>frequency_boost increases"]
     C -->|"No"| E["Decay weight drops<br/>0.5^(days/30)"]
@@ -324,21 +324,39 @@ All cleanup is deterministic. No API calls. No LLM inference.
 - **Interference resolution**: Deduplicates >0.95 similarity matches, keeps higher access count
 - **MEMORY.md sync**: Refreshes working memory with top 5 scored memories per project
 
-## Comparison with Mem0
+## Design Philosophy
 
-|  | Mem0 | NaN Forget |
-|--|------|-----------|
-| Target | App developers | Individual developers using AI daily |
-| Runs locally | Cloud-first | Fully local by default |
-| Dependencies | Complex self-host | SQLite (embedded, no Docker) |
-| MCP integration | Generic | Claude Code hooks + MCP + REST API |
-| LLM cost for memory ops | Yes (extraction, summarization) | Zero (deterministic cleaner) |
-| Cross-LLM | No | Yes (MCP for Claude, REST API for Codex/Cursor) |
-| Auto-save | No | Yes (3 hooks: PostToolUse, UserPromptSubmit, SessionEnd) |
-| Auto-consolidation | No | Yes (after 10 saves or 24h) |
-| Setup | Complex self-host | One command: `npx nan-forget setup` (no Docker) |
-| Free tier | 10K memories | Unlimited |
-| Data ownership | Cloud default | Yours |
+NaN Forget is built around three principles: **lightweight**, **automatic**, and **local**.
+
+### Lightweight
+
+No Docker. No cloud services. No background processes eating RAM. The entire storage layer is a single SQLite file (~3 MB). Embeddings run through Ollama, which you likely already have. Memory operations (save, search, dedup, GC) use zero LLM calls — all deterministic.
+
+### Automatic
+
+Four hooks capture context at every stage of a session — you never call save manually:
+
+1. **UserPromptSubmit** searches memory on every message you send
+2. **Tool descriptions** instruct Claude to save decisions and facts as they happen
+3. **PostToolUse** intercepts `.md` file writes and persists them
+4. **SessionEnd** sweeps the transcript for anything missed
+
+Aging memories consolidate automatically. Duplicates merge. Unused memories decay on a 30-day half-life. No maintenance required.
+
+### Local
+
+Your data stays on your machine in `~/.nan-forget/memories.db`. No accounts, no API keys required (Ollama is free and local), no telemetry. Backup is copying one file. Works across Claude Code (MCP), Codex/Cursor (REST API), and the terminal (CLI) — same database, same memories.
+
+### How it differs from other memory tools
+
+Most AI memory solutions (Mem0, claude-mem) are designed for app developers embedding memory into products, or require Docker/cloud services to run. NaN Forget is designed for **you** — the developer using AI tools daily who wants context that persists across sessions without managing infrastructure.
+
+Key design differences:
+
+- **Retrieval**: Three-stage pipeline (recognition → recall → spreading activation) with decay-weighted scoring, rather than flat vector search
+- **Structure**: Memories carry `problem`, `solution`, `concepts`, and `files` fields — searches find related context even when keywords don't match
+- **Cost**: Memory operations (save, search, dedup, consolidation, GC) are all deterministic — no LLM calls, no API costs
+- **Setup**: One command (`npx nan-forget setup`), no Docker, no containers, no services to manage
 
 ## Source Structure
 
