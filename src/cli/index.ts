@@ -262,8 +262,19 @@ export async function cmdStats(_args: string[]): Promise<string> {
 }
 
 export async function cmdRecent(_args: string[]): Promise<string> {
-  const { client, userId } = getClient();
-  const active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
+  let active;
+  try {
+    const { client, userId } = getClient();
+    active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
+  } catch {
+    // Collection doesn't exist or Qdrant is down — return empty context
+    return JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: 'NaN Forget: Memory services not ready. Run /nan-forget setup or /nan-forget start.',
+      },
+    });
+  }
 
   const sorted = [...active].sort((a, b) =>
     new Date(b.last_accessed ?? b.created_at).getTime() -
