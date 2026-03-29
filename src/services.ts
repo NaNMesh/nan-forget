@@ -2,11 +2,12 @@
  * Service management — shared helpers for checking and starting dependencies.
  *
  * Used by: setup wizard, MCP memory_health/memory_start tools, CLI start command.
+ *
+ * SQLite is embedded (no service needed). Only Ollama + REST API need management.
  */
 
 import { execSync, spawn } from 'node:child_process';
 import { platform } from 'node:os';
-import { resolve } from 'node:path';
 
 // --- Helpers ---
 
@@ -33,60 +34,25 @@ export async function checkUrl(url: string): Promise<boolean> {
 // --- Health Checks ---
 
 export interface HealthStatus {
-  qdrant: boolean;
   ollama: boolean;
   api: boolean;
 }
 
 export async function checkHealth(
-  qdrantUrl = 'http://localhost:6333',
   apiPort = 3456
 ): Promise<HealthStatus> {
-  const [qdrant, ollama, api] = await Promise.all([
-    checkUrl(`${qdrantUrl}/healthz`),
+  const [ollama, api] = await Promise.all([
     checkUrl('http://localhost:11434/'),
     checkUrl(`http://localhost:${apiPort}/memories/stats`),
   ]);
-  return { qdrant, ollama, api };
+  return { ollama, api };
 }
 
 // --- Service Starters ---
 
 export interface StartResult {
-  qdrant: { started: boolean; error?: string };
   ollama: { started: boolean; error?: string };
   api: { started: boolean; error?: string };
-}
-
-export async function startQdrant(qdrantUrl = 'http://localhost:6333'): Promise<{ started: boolean; error?: string }> {
-  if (await checkUrl(`${qdrantUrl}/healthz`)) {
-    return { started: true };
-  }
-
-  // Check Docker
-  const { ok: hasDocker } = run('docker --version');
-  if (!hasDocker) {
-    return { started: false, error: 'Docker not installed. Install from https://docker.com' };
-  }
-
-  // Try docker compose up
-  const { ok } = run('docker compose up -d');
-  if (!ok) {
-    // Try starting existing container
-    const { ok: restarted } = run('docker start nan-forget-qdrant');
-    if (!restarted) {
-      return { started: false, error: 'Failed to start Qdrant. Run: docker compose up -d' };
-    }
-  }
-
-  // Wait for ready
-  for (let i = 0; i < 15; i++) {
-    await sleep(1000);
-    if (await checkUrl(`${qdrantUrl}/healthz`)) {
-      return { started: true };
-    }
-  }
-  return { started: false, error: 'Qdrant did not become healthy within 15s' };
 }
 
 export async function startOllama(): Promise<{ started: boolean; error?: string }> {
@@ -165,9 +131,7 @@ export async function startApi(port = 3456): Promise<{ started: boolean; error?:
   return { started: false, error: `REST API did not start on port ${port}` };
 }
 
-export async function startAll(qdrantUrl = 'http://localhost:6333', apiPort = 3456): Promise<StartResult> {
-  const qdrant = await startQdrant(qdrantUrl);
-
+export async function startAll(apiPort = 3456): Promise<StartResult> {
   let ollama: { started: boolean; error?: string } = { started: false };
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey) {
@@ -181,5 +145,5 @@ export async function startAll(qdrantUrl = 'http://localhost:6333', apiPort = 34
 
   const api = await startApi(apiPort);
 
-  return { qdrant, ollama, api };
+  return { ollama, api };
 }

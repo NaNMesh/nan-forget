@@ -17,7 +17,7 @@ The user should never need to tell you to search or save. You do it automaticall
 
 ## Memory Architecture
 
-- **Long-term memory** = nan-forget Qdrant DB. Source of truth. Persists forever, searchable, auto-consolidates.
+- **Long-term memory** = nan-forget SQLite DB (`~/.nan-forget/memories.db`). Source of truth. Persists forever, searchable, auto-consolidates.
 - **Short-term memory** = Claude's `.md` files. Disposable scratch paper for current session only. Keep these MINIMAL.
 - The DB always wins over `.md` files.
 

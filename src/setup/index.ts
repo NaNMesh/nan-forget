@@ -3,13 +3,13 @@
  * NaN Forget Setup Wizard
  *
  * One command does everything:
- * 1. Starts Qdrant (docker compose up -d)
- * 2. Installs Ollama + embedding model if needed
+ * 1. Ensures Ollama + embedding model
+ * 2. Creates SQLite DB (instant, no Docker)
  * 3. Asks for project context
  * 4. Saves initial memories
  * 5. Creates MEMORY.md
  * 6. Writes MCP config for Claude Code
- * 7. Copies .env from .env.example
+ * 7. Installs hooks
  */
 
 import { createInterface } from 'node:readline';
@@ -21,7 +21,7 @@ import { homedir, platform } from 'node:os';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { execSync } from 'node:child_process';
-import { createQdrantClient, ensureCollection } from '../qdrant.js';
+import { createDb, ensureSchema } from '../sqlite.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
 import {
@@ -29,6 +29,7 @@ import {
   write as writeMemoryMd,
   addLine,
 } from '../memory-md.js';
+import { getMemory } from '../sqlite.js';
 import type { MemoryType } from '../types.js';
 
 // --- Helpers ---
@@ -81,57 +82,6 @@ async function ollamaHasModel(model: string): Promise<boolean> {
 }
 
 // --- Auto-installers ---
-
-async function ensureDocker(): Promise<boolean> {
-  const { ok } = run('docker --version');
-  if (!ok) {
-    console.log('  ✗ Docker not found. Install Docker Desktop: https://docker.com/products/docker-desktop');
-    return false;
-  }
-  console.log('  ✓ Docker found');
-  return true;
-}
-
-async function ensureQdrant(url: string): Promise<boolean> {
-  if (await checkUrl(`${url}/healthz`)) {
-    console.log('  ✓ Qdrant running');
-    return true;
-  }
-
-  console.log('  Starting Qdrant...');
-  // Create data directory on disk — visible, user-owned, survives Docker uninstall
-  const dataDir = join(homedir(), '.nan-forget', 'qdrant-data');
-  run(`mkdir -p "${dataDir}"`);
-
-  // Use bind mount so data lives on disk at ~/.nan-forget/qdrant-data/
-  const { ok } = run(
-    `docker run -d --name nan-forget-qdrant ` +
-    `-p 6333:6333 -p 6334:6334 ` +
-    `-v "${dataDir}":/qdrant/storage ` +
-    `--restart unless-stopped ` +
-    `qdrant/qdrant:v1.17.1`
-  );
-  if (!ok) {
-    // Container might already exist but be stopped
-    const { ok: restarted } = run('docker start nan-forget-qdrant');
-    if (!restarted) {
-      console.log('  ✗ Failed to start Qdrant. Run manually:');
-      console.log(`    docker run -d --name nan-forget-qdrant -p 6333:6333 -v "${dataDir}":/qdrant/storage --restart unless-stopped qdrant/qdrant:v1.17.1`);
-      return false;
-    }
-  }
-
-  // Wait for Qdrant to be ready
-  for (let i = 0; i < 15; i++) {
-    await sleep(1000);
-    if (await checkUrl(`${url}/healthz`)) {
-      console.log('  ✓ Qdrant started');
-      return true;
-    }
-  }
-  console.log('  ✗ Qdrant did not start within 15s. Check: docker logs nan-forget-qdrant');
-  return false;
-}
 
 async function ensureOllama(): Promise<boolean> {
   // Already running?
@@ -242,7 +192,6 @@ async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<st
       config = JSON.parse(raw);
     } catch { /* new file */ }
 
-    const projects = (config.projects ?? {}) as Record<string, Record<string, unknown>>;
     // Add to global mcpServers
     if (!config.mcpServers) config.mcpServers = {};
     (config.mcpServers as Record<string, unknown>)['nan-forget'] = {
@@ -293,7 +242,6 @@ async function ensureDotEnv(provider: string, openaiKey: string): Promise<void> 
   const lines = [
     `NAN_FORGET_EMBEDDING_PROVIDER=${provider}`,
     `NAN_FORGET_USER_ID=default`,
-    `NAN_FORGET_QDRANT_URL=http://localhost:6333`,
   ];
   if (openaiKey) lines.push(`OPENAI_API_KEY=${openaiKey}`);
 
@@ -517,20 +465,11 @@ Fully automatic. Consolidation and cleanup run after every 10 saves or 24h.
 
 export async function setup(): Promise<void> {
   const prompt = createPrompt();
-  const qdrantUrl = 'http://localhost:6333';
 
   console.log('\n🧠 NaN Forget — Setup\n');
   console.log('Checking dependencies...\n');
 
-  // ── Step 1: Docker + Qdrant ──
-  const hasDocker = await ensureDocker();
-  if (!hasDocker) { prompt.close(); return; }
-
-  const hasQdrant = await ensureQdrant(qdrantUrl);
-  if (!hasQdrant) { prompt.close(); return; }
-
-  // ── Step 2: Embeddings ──
-  // Try Ollama first (free). Fall back to OpenAI key.
+  // ── Step 1: Embeddings ──
   let provider = 'ollama';
   let openaiKey = '';
 
@@ -555,6 +494,12 @@ export async function setup(): Promise<void> {
     console.log('  ✓ Using OpenAI embeddings');
   }
 
+  // ── Step 2: Create SQLite DB ──
+  console.log('\n  Creating memory database...');
+  const db = createDb(); // creates ~/.nan-forget/memories.db
+  ensureSchema(db, provider as 'openai' | 'ollama');
+  console.log('  ✓ SQLite database ready (~/.nan-forget/memories.db)');
+
   console.log('\n  All dependencies ready.\n');
 
   // ── Step 3: Project context ──
@@ -568,13 +513,10 @@ export async function setup(): Promise<void> {
   // ── Step 4: Save memories ──
   console.log('\n  Saving initial memories...');
 
-  const client = createQdrantClient(qdrantUrl);
   const embedder = createEmbedder({
     provider: provider as 'openai' | 'ollama',
     openaiApiKey: openaiKey,
   });
-
-  await ensureCollection(client, embedder.provider);
 
   const memories: { content: string; type: MemoryType; tags: string[] }[] = [];
   if (stack) memories.push({ content: `Tech stack: ${stack}`, type: 'fact', tags: ['stack', 'setup'] });
@@ -585,7 +527,7 @@ export async function setup(): Promise<void> {
   const userId = 'default';
 
   for (const m of memories) {
-    const result = await writeMemory(client, embedder, {
+    const result = await writeMemory(db, embedder, {
       content: m.content,
       type: m.type,
       project: projectName || '_global',
@@ -593,7 +535,7 @@ export async function setup(): Promise<void> {
       user_id: userId,
     });
 
-    const mem = await (await import('../qdrant.js')).getMemory(client, result.id);
+    const mem = getMemory(db, result.id);
     if (mem) {
       memState = addLine(memState, {
         type: mem.type,
@@ -610,23 +552,19 @@ export async function setup(): Promise<void> {
     console.log(`  ✓ MEMORY.md created (${memState.lines.length} entries)`);
   }
 
-  // ── Step 5: Docker restart policy ──
-  run('docker update --restart=always nan-forget-qdrant');
-  console.log('  ✓ Qdrant set to auto-start on reboot');
-
-  // ── Step 6: Write configs ──
+  // ── Step 5: Write configs ──
   const configPath = await writeMcpConfig(provider, openaiKey);
   console.log(`  ✓ MCP config → ${configPath}`);
 
   await ensureDotEnv(provider, openaiKey);
   console.log('  ✓ .env created');
 
-  // ── Step 7: Install Claude Code hooks + CLAUDE.md ──
+  // ── Step 6: Install Claude Code hooks + CLAUDE.md ──
   await installHooksAndClaudeMd();
   console.log('  ✓ Claude Code hooks installed');
   console.log('  ✓ CLAUDE.md created');
 
-  // ── Step 8: Install global slash command ──
+  // ── Step 7: Install global slash command ──
   const globalCommandsDir = join(homedir(), '.claude', 'commands');
   await mkdir(globalCommandsDir, { recursive: true });
   const slashCommandSrc = join(resolve(__dirname, '..', '..'), '.claude', 'commands', 'nan-forget.md');
@@ -643,11 +581,11 @@ Manual control for your AI long-term memory. Run without arguments to sync conte
 ## Usage
 
 - \`/nan-forget\` — Save session context to long-term memory + show stats
-- \`/nan-forget setup\` — Run full setup (Qdrant, Ollama, hooks, MCP)
+- \`/nan-forget setup\` — Run full setup (Ollama, hooks, MCP)
 - \`/nan-forget clean\` — Run garbage collection on stale memories
 - \`/nan-forget stats\` — Show memory health (active, archived, by type/project)
 - \`/nan-forget compact\` — Force consolidation of aging memories
-- \`/nan-forget health\` — Check if Qdrant, Ollama, and REST API are running
+- \`/nan-forget health\` — Check if Ollama and REST API are running
 - \`/nan-forget start\` — Start all services
 - \`/nan-forget search <query>\` — Search memories
 
@@ -695,7 +633,7 @@ Always display results in a clean, readable format.
     console.log('  ✓ /nan-forget slash command installed globally');
   }
 
-  // ── Step 9: Start REST API for non-MCP LLMs ──
+  // ── Step 8: Start REST API for non-MCP LLMs ──
   const startApi = await prompt.ask('\nStart REST API for Codex/Cursor? (y/n)', 'y');
   if (startApi.toLowerCase() === 'y') {
     const { ok: apiOk } = run('npx nan-forget api &');
@@ -705,13 +643,18 @@ Always display results in a clean, readable format.
     }
   }
 
+  // Close the DB
+  db.close();
+
   // ── Done ──
   console.log('\n🎉 Done. Restart Claude Code. That\'s it.\n');
   console.log('nan-forget will automatically:');
   console.log('  • Load context from past sessions on startup');
   console.log('  • Save decisions, preferences, and facts as you work');
   console.log('  • Consolidate and clean memories in the background');
-  console.log('  • Share memories across all AI tools (Claude, Codex, etc.)\n');
+  console.log('  • Share memories across all AI tools (Claude, Codex, etc.)');
+  console.log('');
+  console.log('Data stored at: ~/.nan-forget/memories.db (single file, no Docker)\n');
 
   if (memories.length > 0) {
     console.log('Try it:');

@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
-  createQdrantClient,
-  ensureCollection,
+  createDb,
+  ensureSchema,
   getMemory,
   deleteCollection,
-} from '../qdrant.js';
+} from '../sqlite.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory, inferType } from '../writer.js';
 
-const client = createQdrantClient();
+const client = createDb(':memory:');
 
 // Use a real-ish embedder that produces deterministic vectors from content
 // We mock by hashing content into a consistent vector
@@ -48,7 +48,7 @@ const embedder = createTestEmbedder();
 describe('Memory Writer', () => {
   beforeAll(async () => {
     await deleteCollection(client);
-    await ensureCollection(client, 'openai');
+    ensureSchema(client, 'openai');
   });
 
   afterAll(async () => {

@@ -3,10 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  createQdrantClient,
-  ensureCollection,
+  createDb,
+  ensureSchema,
   deleteCollection,
-} from '../qdrant.js';
+} from '../sqlite.js';
 
 // Set env vars BEFORE importing CLI (it reads env at getClient() call time)
 const tempDir = await mkdtemp(join(tmpdir(), 'nanforget-cli-'));
@@ -27,9 +27,11 @@ import {
   cmdStats,
   cmdExport,
   run,
+  setTestDb,
 } from '../cli/index.js';
 
-const client = createQdrantClient();
+const client = createDb(':memory:');
+setTestDb(client);
 
 // Test embedder for seeding data
 function createTestEmbedder() {
@@ -69,7 +71,7 @@ let seededId: string;
 describe('CLI Commands', () => {
   beforeAll(async () => {
     await deleteCollection(client);
-    await ensureCollection(client, 'openai');
+    ensureSchema(client, 'openai');
 
     // Seed some memories via writer (bypasses CLI's embedder requirement)
     const r = await writeMemory(client, embedder, {

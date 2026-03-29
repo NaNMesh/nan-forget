@@ -47,10 +47,12 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
-    "@qdrant/js-client-rest": "^1.13.0",
+    "better-sqlite3": "^12.8.0",
+    "sqlite-vec": "^0.1.7",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.5.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

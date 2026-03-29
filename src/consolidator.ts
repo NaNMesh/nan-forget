@@ -12,14 +12,14 @@
  * 5. Archive originals with backlink to consolidated entry
  */
 
-import type { QdrantClient } from '@qdrant/js-client-rest';
+import type Database from 'better-sqlite3';
 import type { createEmbedder } from './embeddings.js';
 import {
   scrollMemories,
   searchMemories,
   updateMemory,
   upsertMemory,
-} from './qdrant.js';
+} from './sqlite.js';
 import { decayWeight } from './retriever.js';
 import type { Memory, MemoryType } from './types.js';
 
@@ -62,7 +62,7 @@ export interface ConsolidateResult {
 // --- Step 1: Find aging memories ---
 
 async function findAgingMemories(
-  client: QdrantClient,
+  client: Database.Database,
   userId: string,
   config: ConsolidatorConfig
 ): Promise<Memory[]> {
@@ -84,7 +84,7 @@ interface Cluster {
 }
 
 async function clusterMemories(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   memories: Memory[],
   config: ConsolidatorConfig
@@ -226,7 +226,7 @@ async function llmSummarize(memories: Memory[]): Promise<string> {
 // --- Step 4+5: Save consolidated + archive originals ---
 
 async function saveConsolidated(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   cluster: Cluster,
   consolidatedContent: string
@@ -283,7 +283,7 @@ async function saveConsolidated(
 // --- Full Consolidation ---
 
 export async function consolidate(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   userId: string,
   config: Partial<ConsolidatorConfig> = {}

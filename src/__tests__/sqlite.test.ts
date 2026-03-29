@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
-  createQdrantClient,
-  ensureCollection,
+  createDb,
+  ensureSchema,
   upsertMemory,
   getMemory,
   updateMemory,
@@ -10,10 +10,10 @@ import {
   recommendMemories,
   scrollMemories,
   deleteCollection,
-} from '../qdrant.js';
+} from '../sqlite.js';
 import type { Memory } from '../types.js';
 
-const client = createQdrantClient();
+const client = createDb(':memory:');
 const VECTOR_SIZE = 1536;
 
 // Fixed UUIDs for deterministic tests
@@ -60,27 +60,27 @@ function makeMemory(overrides: Partial<Memory> = {}): Memory {
   };
 }
 
-describe('Qdrant Client Wrapper', () => {
+describe('SQLite Storage Layer', () => {
   beforeAll(async () => {
-    await deleteCollection(client);
-    await ensureCollection(client, 'openai');
+    deleteCollection(client);
+    ensureSchema(client, 'openai');
   });
 
   afterAll(async () => {
-    await deleteCollection(client);
+    deleteCollection(client);
   });
 
-  it('creates collection with correct config', async () => {
-    const collections = await client.getCollections();
-    const engrams = collections.collections.find((c) => c.name === 'engrams');
-    expect(engrams).toBeDefined();
+  it('creates schema correctly', async () => {
+    // Schema was created in beforeAll — just verify we can query
+    const result = searchMemories(client, fakeVector(0), { status: 'active' }, 1);
+    expect(Array.isArray(result)).toBe(true);
   });
 
   it('upserts and retrieves a memory', async () => {
     const mem = makeMemory({ id: IDS.upsert1 });
-    await upsertMemory(client, mem, fakeVector(1));
+    upsertMemory(client, mem, fakeVector(1));
 
-    const result = await getMemory(client, IDS.upsert1);
+    const result = getMemory(client, IDS.upsert1);
     expect(result).not.toBeNull();
     expect(result!.content).toBe('Using FastAPI not Django for the backend');
     expect(result!.type).toBe('decision');
@@ -88,21 +88,21 @@ describe('Qdrant Client Wrapper', () => {
   });
 
   it('returns null for non-existent memory', async () => {
-    const result = await getMemory(client, '99999999-9999-9999-9999-999999999999');
+    const result = getMemory(client, '99999999-9999-9999-9999-999999999999');
     expect(result).toBeNull();
   });
 
   it('updates memory payload fields', async () => {
     const mem = makeMemory({ id: IDS.update1 });
-    await upsertMemory(client, mem, fakeVector(2));
+    upsertMemory(client, mem, fakeVector(2));
 
-    await updateMemory(client, IDS.update1, {
+    updateMemory(client, IDS.update1, {
       content: 'Switched to Django actually',
       tags: ['backend', 'framework', 'changed'],
       access_count: 5,
     });
 
-    const result = await getMemory(client, IDS.update1);
+    const result = getMemory(client, IDS.update1);
     expect(result!.content).toBe('Switched to Django actually');
     expect(result!.tags).toContain('changed');
     expect(result!.access_count).toBe(5);
@@ -110,11 +110,11 @@ describe('Qdrant Client Wrapper', () => {
 
   it('archives a memory', async () => {
     const mem = makeMemory({ id: IDS.archive1 });
-    await upsertMemory(client, mem, fakeVector(3));
+    upsertMemory(client, mem, fakeVector(3));
 
-    await archiveMemory(client, IDS.archive1);
+    archiveMemory(client, IDS.archive1);
 
-    const result = await getMemory(client, IDS.archive1);
+    const result = getMemory(client, IDS.archive1);
     expect(result!.status).toBe('archived');
   });
 
@@ -123,11 +123,11 @@ describe('Qdrant Client Wrapper', () => {
     const mem2 = makeMemory({ id: IDS.search2, project: 'project-a', type: 'fact' });
     const mem3 = makeMemory({ id: IDS.search3, project: 'project-b', type: 'decision' });
 
-    await upsertMemory(client, mem1, fakeVector(10));
-    await upsertMemory(client, mem2, fakeVector(11));
-    await upsertMemory(client, mem3, fakeVector(12));
+    upsertMemory(client, mem1, fakeVector(10));
+    upsertMemory(client, mem2, fakeVector(11));
+    upsertMemory(client, mem3, fakeVector(12));
 
-    const results = await searchMemories(
+    const results = searchMemories(
       client,
       fakeVector(10),
       { project: 'project-a', status: 'active' },
@@ -141,9 +141,9 @@ describe('Qdrant Client Wrapper', () => {
 
   it('search returns high cosine score for identical vector (dedup detection)', async () => {
     const mem = makeMemory({ id: IDS.dedup1, content: 'exact same content' });
-    await upsertMemory(client, mem, fakeVector(20));
+    upsertMemory(client, mem, fakeVector(20));
 
-    const results = await searchMemories(client, fakeVector(20), { status: 'active' }, 5);
+    const results = searchMemories(client, fakeVector(20), { status: 'active' }, 5);
     const match = results.find((r) => r.memory.id === IDS.dedup1);
     expect(match).toBeDefined();
     expect(match!.score).toBeGreaterThan(0.99);
@@ -155,12 +155,12 @@ describe('Qdrant Client Wrapper', () => {
     const similar2 = base.map((v) => v + 0.02);
     const different = fakeVector(999);
 
-    await upsertMemory(client, makeMemory({ id: IDS.rec1 }), base);
-    await upsertMemory(client, makeMemory({ id: IDS.rec2 }), similar1);
-    await upsertMemory(client, makeMemory({ id: IDS.rec3 }), similar2);
-    await upsertMemory(client, makeMemory({ id: IDS.recFar }), different);
+    upsertMemory(client, makeMemory({ id: IDS.rec1 }), base);
+    upsertMemory(client, makeMemory({ id: IDS.rec2 }), similar1);
+    upsertMemory(client, makeMemory({ id: IDS.rec3 }), similar2);
+    upsertMemory(client, makeMemory({ id: IDS.recFar }), different);
 
-    const results = await recommendMemories(
+    const results = recommendMemories(
       client,
       [IDS.rec1],
       [IDS.rec1],
@@ -185,10 +185,10 @@ describe('Qdrant Client Wrapper', () => {
       access_count: 50,
     });
 
-    await upsertMemory(client, old, fakeVector(200));
-    await upsertMemory(client, recent, fakeVector(201));
+    upsertMemory(client, old, fakeVector(200));
+    upsertMemory(client, recent, fakeVector(201));
 
-    const stale = await scrollMemories(client, {
+    const stale = scrollMemories(client, {
       last_accessed_before: '2025-01-01T00:00:00Z',
       max_access_count: 3,
     });

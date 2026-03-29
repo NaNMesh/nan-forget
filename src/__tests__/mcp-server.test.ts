@@ -6,10 +6,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../mcp/server.js';
 import {
-  createQdrantClient,
-  ensureCollection,
+  createDb,
+  ensureSchema,
   deleteCollection,
-} from '../qdrant.js';
+} from '../sqlite.js';
 
 function createTestEmbedder() {
   function hashToVector(text: string): number[] {
@@ -43,12 +43,12 @@ function createTestEmbedder() {
 describe('MCP Server', () => {
   let client: Client;
   let tempDir: string;
-  const qdrant = createQdrantClient();
+  const qdrant = createDb(':memory:');
 
   beforeAll(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'nanforget-mcp-'));
     await deleteCollection(qdrant);
-    await ensureCollection(qdrant, 'openai');
+    ensureSchema(qdrant, 'openai');
 
     const { server } = createServer({
       client: qdrant,
@@ -242,7 +242,7 @@ describe('MCP Server', () => {
     });
 
     const text = (result.content as { type: string; text: string }[])[0].text;
-    expect(text).toContain('Qdrant');
+    expect(text).toContain('SQLite');
     expect(text).toContain('Ollama');
     expect(text).toContain('REST API');
   });

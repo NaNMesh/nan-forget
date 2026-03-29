@@ -19,7 +19,7 @@
  */
 
 import { parseArgs } from 'node:util';
-import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories, deleteCollection } from '../qdrant.js';
+import { createDb, ensureSchema, getMemory, updateMemory, scrollMemories, deleteCollection } from '../sqlite.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
@@ -28,11 +28,16 @@ import { consolidate } from '../consolidator.js';
 import { read as readMemoryMd } from '../memory-md.js';
 import type { MemoryType, MemoryStatus, EmbeddingProvider } from '../types.js';
 
+// --- Test injection ---
+
+import type Database from 'better-sqlite3';
+let _testDb: Database.Database | null = null;
+export function setTestDb(db: Database.Database | null) { _testDb = db; }
+
 // --- Config ---
 
 function getConfig() {
   return {
-    qdrantUrl: process.env.NAN_FORGET_QDRANT_URL ?? 'http://localhost:6333',
     openaiApiKey: process.env.OPENAI_API_KEY ?? '',
     // Auto-detect: use OpenAI if key exists, otherwise Ollama (free, local)
     embeddingProvider: (
@@ -46,8 +51,10 @@ function getConfig() {
 
 function getClient() {
   const cfg = getConfig();
+  const client = _testDb ?? createDb();
+  ensureSchema(client, cfg.embeddingProvider);
   return {
-    client: createQdrantClient(cfg.qdrantUrl),
+    client,
     embedder: createEmbedder({ provider: cfg.embeddingProvider, openaiApiKey: cfg.openaiApiKey }),
     ...cfg,
   };
@@ -70,7 +77,7 @@ export async function cmdAdd(args: string[]): Promise<string> {
   if (!content) return 'Error: No content provided. Usage: nan-forget add "your memory text"';
 
   const { client, embedder, userId } = getClient();
-  await ensureCollection(client, embedder.provider);
+  ensureSchema(client, embedder.provider);
 
   const result = await writeMemory(client, embedder, {
     content,
@@ -101,7 +108,7 @@ export async function cmdSearch(args: string[]): Promise<string> {
   if (!query) return 'Error: No query provided. Usage: nan-forget search "your query"';
 
   const { client, embedder, userId } = getClient();
-  await ensureCollection(client, embedder.provider);
+  ensureSchema(client, embedder.provider);
 
   const maxStage = Math.min(3, Math.max(1, parseInt(values.depth!, 10))) as 1 | 2 | 3;
   const result = await retrieve(client, embedder, query, {
@@ -216,7 +223,7 @@ export async function cmdArchive(args: string[]): Promise<string> {
 
 export async function cmdClean(_args: string[]): Promise<string> {
   const { client, embedder, userId, projectRoot } = getClient();
-  await ensureCollection(client, embedder.provider);
+  ensureSchema(client, embedder.provider);
 
   const result = await clean(client, embedder, userId, { project_root: projectRoot });
 
@@ -267,7 +274,7 @@ export async function cmdRecent(_args: string[]): Promise<string> {
     const { client, userId } = getClient();
     active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
   } catch {
-    // Collection doesn't exist or Qdrant is down — return empty context
+    // DB not initialized or Ollama down — return empty context
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
@@ -337,7 +344,7 @@ export async function cmdRecall(_args: string[]): Promise<string> {
 
   try {
     const { client, embedder, userId } = getClient();
-    await ensureCollection(client, embedder.provider);
+    ensureSchema(client, embedder.provider);
 
     const result = await retrieve(client, embedder, query, {
       user_id: userId,
@@ -380,7 +387,7 @@ export async function cmdConsolidate(args: string[]): Promise<string> {
   });
 
   const { client, embedder, userId, projectRoot } = getClient();
-  await ensureCollection(client, embedder.provider);
+  ensureSchema(client, embedder.provider);
 
   const result = await consolidate(client, embedder, userId, {
     project: values.project as string | undefined,
@@ -427,7 +434,7 @@ NaN Forget — Long-term memory for AI coding tools
 Usage: nan-forget <command> [options]
 
 Commands:
-  setup              One-command setup (Docker, Qdrant, Ollama, hooks, MCP)
+  setup              One-command setup (Ollama, hooks, MCP)
   add "text"         Save a memory
   search "query"     Search memories
   get <id>           Get memory by ID
@@ -440,7 +447,7 @@ Commands:
   export             Export all memories as JSON
   serve              Start MCP server (stdio)
   api                Start REST API server
-  start              Start all services (Qdrant + Ollama + API)
+  start              Start all services (Ollama + API)
   health             Check if services are running
   prompt             Print system prompt for non-MCP LLMs
 
@@ -453,8 +460,7 @@ Options (vary by command):
 
 Environment:
   OPENAI_API_KEY                 OpenAI API key
-  NAN_FORGET_QDRANT_URL          Qdrant URL (default: http://localhost:6333)
-  NAN_FORGET_EMBEDDING_PROVIDER  openai|ollama (default: openai)
+  NAN_FORGET_EMBEDDING_PROVIDER  openai|ollama (default: ollama)
   NAN_FORGET_USER_ID             User ID (default: default)
   NAN_FORGET_PROJECT_ROOT        Project root for MEMORY.md
 `.trim();
@@ -485,11 +491,11 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
     const { startAll, checkHealth } = await import('../services.js');
     console.log('\nNaN Forget — Starting Services\n');
     const result = await startAll();
-    console.log(`  Qdrant:   ${result.qdrant.started ? '✓ running' : '✗ ' + (result.qdrant.error ?? 'failed')}`);
+    console.log(`  SQLite:   ✓ (embedded)`);
     console.log(`  Ollama:   ${result.ollama.started ? '✓ running' : '✗ ' + (result.ollama.error ?? 'failed')}`);
     console.log(`  REST API: ${result.api.started ? '✓ running' : '✗ ' + (result.api.error ?? 'failed')}`);
     const health = await checkHealth();
-    const allUp = health.qdrant && health.ollama && health.api;
+    const allUp = health.ollama && health.api;
     console.log(allUp ? '\n  All services running.\n' : '\n  Some services failed. Check errors above.\n');
     return;
   }
@@ -503,7 +509,7 @@ export async function run(argv: string[] = process.argv.slice(2)): Promise<void>
   if (command === 'health') {
     const { checkHealth } = await import('../services.js');
     const health = await checkHealth();
-    console.log(`Qdrant:   ${health.qdrant ? '✓ running' : '✗ down'}`);
+    console.log(`SQLite:   ✓ (embedded)`);
     console.log(`Ollama:   ${health.ollama ? '✓ running' : '✗ down'}`);
     console.log(`REST API: ${health.api ? '✓ running' : '✗ down'}`);
     return;

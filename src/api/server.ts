@@ -2,13 +2,13 @@
  * NaN Forget REST API Server
  *
  * Lightweight HTTP API for non-MCP clients (Codex, custom integrations).
- * Shares the same Qdrant backend as the MCP server — same memories, same indexes.
+ * Shares the same SQLite database as the MCP server — same memories, same indexes.
  *
  * Usage: nan-forget api [--port 3456]
  */
 
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories, searchMemories } from '../qdrant.js';
+import { createDb, ensureSchema, getMemory, updateMemory, scrollMemories, searchMemories } from '../sqlite.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
@@ -18,7 +18,6 @@ import type { MemoryType } from '../types.js';
 
 // --- Config ---
 
-const QDRANT_URL = process.env.NAN_FORGET_QDRANT_URL ?? 'http://localhost:6333';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? '';
 const EMBEDDING_PROVIDER = (
   process.env.NAN_FORGET_EMBEDDING_PROVIDER ??
@@ -62,7 +61,7 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
 // --- Router ---
 
 export function startApiServer(port = PORT) {
-  const client = createQdrantClient(QDRANT_URL);
+  const client = createDb();
   const embedder = createEmbedder({
     provider: EMBEDDING_PROVIDER,
     openaiApiKey: OPENAI_API_KEY,
@@ -85,7 +84,7 @@ export function startApiServer(port = PORT) {
     }
 
     try {
-      await ensureCollection(client, embedder.provider);
+      ensureSchema(client, embedder.provider);
 
       // POST /memories — save
       if (method === 'POST' && path === '/memories') {

@@ -2,9 +2,9 @@ import {
   upsertMemory,
   updateMemory,
   searchMemories,
-} from './qdrant.js';
+} from './sqlite.js';
 import type { createEmbedder } from './embeddings.js';
-import type { QdrantClient } from '@qdrant/js-client-rest';
+import type Database from 'better-sqlite3';
 import type {
   Memory,
   MemoryType,
@@ -37,7 +37,7 @@ export interface WriteResult {
 }
 
 export async function writeMemory(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   input: WriteMemoryInput
 ): Promise<WriteResult> {
@@ -109,7 +109,7 @@ export async function writeMemory(
     ...(input.concepts?.length ? { concepts: input.concepts } : {}),
   };
 
-  // 5. Save to Qdrant
+  // 5. Save to DB
   await upsertMemory(client, memory, vector);
 
   return { id: memory.id, deduplicated: false };

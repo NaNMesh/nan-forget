@@ -3,13 +3,13 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  createQdrantClient,
-  ensureCollection,
+  createDb,
+  ensureSchema,
   deleteCollection,
   getMemory,
   updateMemory,
   scrollMemories,
-} from '../qdrant.js';
+} from '../sqlite.js';
 import { writeMemory } from '../writer.js';
 import {
   gcDecayed,
@@ -21,7 +21,7 @@ import {
 } from '../cleaner.js';
 import { read as readMemoryMd } from '../memory-md.js';
 
-const client = createQdrantClient();
+const client = createDb(':memory:');
 const USER_ID = 'cleaner-test-user';
 
 function createTestEmbedder() {
@@ -62,7 +62,7 @@ describe('Cleaner', () => {
   beforeAll(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'nanforget-cleaner-'));
     await deleteCollection(client);
-    await ensureCollection(client, 'openai');
+    ensureSchema(client, 'openai');
   });
 
   afterAll(async () => {
@@ -157,10 +157,10 @@ describe('Cleaner', () => {
     it('archives near-duplicate memories, keeps higher access_count', async () => {
       // Fresh collection to isolate
       await deleteCollection(client);
-      await ensureCollection(client, 'openai');
+      ensureSchema(client, 'openai');
 
       // Use upsertMemory directly to bypass writer dedup
-      const { upsertMemory } = await import('../qdrant.js');
+      const { upsertMemory } = await import('../sqlite.js');
 
       const now = new Date().toISOString();
       const base = {
@@ -205,7 +205,7 @@ describe('Cleaner', () => {
     it('writes top memories to MEMORY.md', async () => {
       // Fresh collection for this test
       await deleteCollection(client);
-      await ensureCollection(client, 'openai');
+      ensureSchema(client, 'openai');
 
       // Write a fresh active memory
       await writeMemory(client, embedder, {

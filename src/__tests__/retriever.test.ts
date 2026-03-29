@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
-  createQdrantClient,
-  ensureCollection,
+  createDb,
+  ensureSchema,
   getMemory,
   deleteCollection,
-} from '../qdrant.js';
+} from '../sqlite.js';
 import { writeMemory } from '../writer.js';
 import {
   recognize,
@@ -16,7 +16,7 @@ import {
   adjustedScore,
 } from '../retriever.js';
 
-const client = createQdrantClient();
+const client = createDb(':memory:');
 
 // Deterministic test embedder (same as writer tests)
 function createTestEmbedder() {
@@ -94,7 +94,7 @@ describe('Scoring Functions', () => {
 describe('Retriever Pipeline', () => {
   beforeAll(async () => {
     await deleteCollection(client);
-    await ensureCollection(client, 'openai');
+    ensureSchema(client, 'openai');
 
     // Seed memories for retrieval tests
     const memories = [

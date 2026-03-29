@@ -12,9 +12,9 @@ Your AI forgets everything when the session ends. NaN Forget fixes that.
 npx nan-forget setup
 ```
 
-That's it. The wizard installs Docker, Qdrant, embeddings, hooks, and MCP config. Restart Claude Code. Your AI now remembers.
+That's it. The wizard installs Ollama, embeddings, hooks, and MCP config. Restart Claude Code. Your AI now remembers.
 
-No API keys needed. Runs locally. Free forever.
+No API keys needed. No Docker needed. Runs locally. Free forever.
 
 ---
 
@@ -45,16 +45,18 @@ You never call save or search manually. Here's what happens behind the scenes:
 | Event | What fires | What happens |
 |-------|-----------|--------------|
 | Session starts | `memory_sync` | Lightweight handshake — checks health, loads stats, lists projects. No heavy search. |
+| You send a message | UserPromptSubmit hook | `nan-forget recall` auto-searches memory for relevant context and injects it into the conversation. |
 | You discuss a topic | `memory_search` | Claude searches the DB dynamically whenever relevant context might exist — like how you recall things on-demand. |
-| Claude learns something | `memory_save` | Claude saves decisions, preferences, and facts to Qdrant immediately. Tool descriptions tell Claude "you MUST call this." |
-| Claude writes a `.md` file | PostToolUse hook | `memory-sync.js` intercepts the write, parses frontmatter, and auto-saves it to Qdrant via `nan-forget add`. |
+| Claude learns something | `memory_save` | Claude saves decisions, preferences, and facts immediately. Tool descriptions tell Claude "you MUST call this." |
+| Claude writes a `.md` file | PostToolUse hook | `memory-sync.js` intercepts the write, parses frontmatter, and auto-saves it to SQLite via `nan-forget add`. |
 | Session ends | SessionEnd hook | `session-end.js` scans the conversation transcript for unsaved decisions/facts and saves the top 5 to the DB. |
 | Every 10 saves or 24h | Auto-consolidate | Aging memories get clustered and compacted into long-term entries. Originals are archived. |
 
-Three layers of protection ensure nothing is lost:
-1. **Claude saves proactively** (directive tool descriptions)
-2. **Hook catches .md writes** (PostToolUse intercept)
-3. **End-of-session sweep** (SessionEnd transcript scan)
+Four layers of protection ensure nothing is lost:
+1. **Auto-recall on every message** (UserPromptSubmit hook)
+2. **Claude saves proactively** (directive tool descriptions)
+3. **Hook catches .md writes** (PostToolUse intercept)
+4. **End-of-session sweep** (SessionEnd transcript scan)
 
 ### Other LLMs (Codex, Cursor, etc.)
 
@@ -64,7 +66,7 @@ Other LLMs don't have MCP or hooks. Instead:
 2. **Paste it into your LLM's system prompt**. It tells the LLM to call the REST API for save/search/sync.
 3. **The LLM calls the REST API** at `localhost:3456` during conversation.
 
-The REST API mirrors all 10 MCP tools. Same database, same retrieval pipeline, same consolidation. Memories saved by Claude are searchable from Codex and vice versa.
+The REST API mirrors the MCP tools. Same database, same retrieval pipeline, same consolidation. Memories saved by Claude are searchable from Codex and vice versa.
 
 ```bash
 # Start the REST API
@@ -143,25 +145,28 @@ flowchart TB
         MD[".md files<br/>Current session context<br/>Disposable scratch paper"]
     end
     subgraph Long["Long-Term Memory"]
-        QD["Qdrant Vector DB<br/>Permanent engrams<br/>Semantic search + decay"]
+        DB["SQLite + sqlite-vec<br/>~/.nan-forget/memories.db<br/>Semantic search + decay"]
     end
     subgraph Auto["Automatic Processes"]
-        Hook["PostToolUse Hook<br/>Syncs .md writes → Qdrant"]
+        Hook["Hooks (3)<br/>PostToolUse: .md → DB<br/>UserPromptSubmit: auto-recall<br/>SessionEnd: transcript sweep"]
         Consolidate["Consolidation Engine<br/>Clusters + summarizes aging memories"]
         GC["Garbage Collection<br/>Decay, dedup, expiry"]
     end
     MD -->|"hook intercepts"| Hook
-    Hook -->|"nan-forget add"| QD
-    QD --> Consolidate
-    Consolidate --> QD
-    QD --> GC
+    Hook -->|"nan-forget add"| DB
+    DB --> Consolidate
+    Consolidate --> DB
+    DB --> GC
 ```
 
 **Short-term memory** = Claude's built-in `.md` files. Disposable. Current session only.
 
-**Long-term memory** = Qdrant vector database. Permanent. Searchable across all sessions, all projects, all LLM tools.
+**Long-term memory** = SQLite database with sqlite-vec vector search. Single file. Permanent. Searchable across all sessions, all projects, all LLM tools.
 
-A PostToolUse hook intercepts every `.md` memory file Claude writes and automatically saves it to Qdrant. The user never calls save manually.
+Three hooks handle memory automatically:
+- **PostToolUse** intercepts `.md` file writes and saves them to the DB.
+- **UserPromptSubmit** runs `nan-forget recall` on every user message, auto-searching memory for relevant context.
+- **SessionEnd** scans the conversation transcript for unsaved decisions and saves the top 5.
 
 ## Three-Stage Retrieval Pipeline
 
@@ -208,7 +213,7 @@ flowchart TB
 
 **Triggers automatically** after every 10 saves or 24 hours. No user action needed.
 
-## 11 MCP Tools
+## 13 MCP Tools
 
 | Tool | Purpose |
 |------|---------|
@@ -221,10 +226,38 @@ flowchart TB
 | `memory_consolidate` | Force consolidation of aging memories |
 | `memory_clean` | Garbage collection (decay, dedup, expiry, MEMORY.md sync) |
 | `memory_stats` | Memory health dashboard |
-| `memory_health` | Check if Qdrant, Ollama, REST API are running |
-| `memory_start` | Boot all services |
+| `memory_health` | Check if Ollama, REST API are running |
+| `memory_start` | Boot Ollama + REST API |
+| `memory_checkpoint` | Save full problem→solution context after completing a task |
+| `memory_compress` | Compress persisted `.md` memory files to minimal stubs |
+
+## Structured Memories
+
+`memory_save` accepts structured fields for richer vector representation:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `content` | string | Full description (required) |
+| `type` | string | `fact`, `decision`, `preference`, `task`, `context` |
+| `project` | string | Project name |
+| `problem` | string | What was the challenge |
+| `solution` | string | How it was solved |
+| `concepts` | string[] | Searchable tags (`["auth", "jwt", "middleware"]`) |
+| `files` | string[] | Files involved (`["src/auth.ts"]`) |
+
+All fields are embedded together into a single vector. Searches for "JWT auth bug" find memories tagged with those concepts even if the content text doesn't match literally.
+
+### Checkpoint Workflow
+
+After completing a task, call `memory_checkpoint` with `task_summary`, `problem`, `solution`, `files`, `concepts`, and `project`. Saves the full problem→solution context to long-term memory. Every completed task = one checkpoint.
+
+### Memory Compression
+
+`memory_compress` scans `.claude/projects/*/memory/` for `.md` files already persisted to the DB. Persisted files are replaced with minimal stubs. Reduces context window bloat.
 
 ## REST API (for non-MCP LLMs)
+
+Shares the same SQLite database as the MCP server — memories saved by Claude are searchable from Codex and vice versa.
 
 ```
 POST   /memories              — Save a memory
@@ -256,6 +289,14 @@ curl http://localhost:3456/memories/instructions
 
 Auto-detection: Ollama running? Use it. Not running? Check for `OPENAI_API_KEY`. No config needed.
 
+## Data Storage
+
+All data lives in a single SQLite file at `~/.nan-forget/memories.db`. No Docker, no services, no data loss on updates.
+
+- **Vector search**: [sqlite-vec](https://github.com/asg017/sqlite-vec) extension (cosine distance, embedded in process)
+- **Metadata**: Standard SQL tables with indexes on `user_id`, `status`, `project`, `type`
+- **Backup**: Copy one file. **Restore**: Put it back.
+
 ## Memory Lifecycle
 
 ```mermaid
@@ -281,7 +322,7 @@ All cleanup is deterministic. No API calls. No LLM inference.
 - **Decay GC**: Archives memories below 0.1 decay (~100 days untouched)
 - **Expiration**: Archives memories past `expires_at` date
 - **Interference resolution**: Deduplicates >0.95 similarity matches, keeps higher access count
-- **MEMORY.md sync**: Refreshes working memory with top 10 scored memories per project
+- **MEMORY.md sync**: Refreshes working memory with top 5 scored memories per project
 
 ## Comparison with Mem0
 
@@ -289,12 +330,13 @@ All cleanup is deterministic. No API calls. No LLM inference.
 |--|------|-----------|
 | Target | App developers | Individual developers using AI daily |
 | Runs locally | Cloud-first | Fully local by default |
+| Dependencies | Complex self-host | SQLite (embedded, no Docker) |
 | MCP integration | Generic | Claude Code hooks + MCP + REST API |
 | LLM cost for memory ops | Yes (extraction, summarization) | Zero (deterministic cleaner) |
 | Cross-LLM | No | Yes (MCP for Claude, REST API for Codex/Cursor) |
-| Auto-save | No | Yes (PostToolUse hook) |
+| Auto-save | No | Yes (3 hooks: PostToolUse, UserPromptSubmit, SessionEnd) |
 | Auto-consolidation | No | Yes (after 10 saves or 24h) |
-| Setup | Complex self-host | One command: `npx nan-forget setup` |
+| Setup | Complex self-host | One command: `npx nan-forget setup` (no Docker) |
 | Free tier | 10K memories | Unlimited |
 | Data ownership | Cloud default | Yours |
 
@@ -302,24 +344,25 @@ All cleanup is deterministic. No API calls. No LLM inference.
 
 ```
 src/
-  qdrant.ts         Qdrant client wrapper + schema + indexes
+  sqlite.ts         SQLite + sqlite-vec storage layer (schema, CRUD, vector search)
   embeddings.ts     OpenAI / Ollama abstraction
   writer.ts         Memory writer with dedup (>0.92 = merge)
   retriever.ts      Three-stage retrieval pipeline
   consolidator.ts   LLM summarization + deterministic fallback
   cleaner.ts        GC: decay, expiry, dedup, MEMORY.md sync
-  services.ts       Service management (health checks, starters)
+  services.ts       Service management (Ollama, REST API)
   memory-md.ts      MEMORY.md manager
   types.ts          Shared types (Memory, MemoryType, etc.)
-  mcp/server.ts     MCP server, 11 tools
+  mcp/server.ts     MCP server, 13 tools
   api/server.ts     REST API server, 10 endpoints
   cli/index.ts      CLI with 14 commands
-  setup/index.ts    Setup wizard (Docker, Ollama, hooks, MCP config)
+  setup/index.ts    Setup wizard (Ollama, hooks, MCP config)
 
 .claude/
   commands/nan-forget.md   Slash command for manual control
-  hooks/memory-sync.js     PostToolUse hook (auto-saves .md → Qdrant)
-  settings.json            Hook configuration
+  hooks/memory-sync.js     PostToolUse hook (auto-saves .md → SQLite)
+  hooks/session-end.js     SessionEnd hook (transcript sweep for unsaved memories)
+  settings.json            Hook config (PostToolUse + SessionEnd + UserPromptSubmit)
 ```
 
 ---

@@ -20,13 +20,13 @@
  *    - Replace MEMORY.md project section
  */
 
-import type { QdrantClient } from '@qdrant/js-client-rest';
+import type Database from 'better-sqlite3';
 import type { createEmbedder } from './embeddings.js';
 import {
   searchMemories,
   updateMemory,
   scrollMemories,
-} from './qdrant.js';
+} from './sqlite.js';
 import { decayWeight, adjustedScore } from './retriever.js';
 import {
   read as readMemoryMd,
@@ -70,7 +70,7 @@ export interface CleanerResult {
 // --- Step 1: Garbage Collection (decay) ---
 
 export async function gcDecayed(
-  client: QdrantClient,
+  client: Database.Database,
   userId: string,
   config: CleanerConfig
 ): Promise<string[]> {
@@ -95,7 +95,7 @@ export async function gcDecayed(
 // --- Step 2: Expiration ---
 
 export async function gcExpired(
-  client: QdrantClient,
+  client: Database.Database,
   userId: string,
   config: CleanerConfig
 ): Promise<string[]> {
@@ -120,7 +120,7 @@ export async function gcExpired(
 // --- Step 3: Interference Resolution (dedup) ---
 
 export async function gcDuplicates(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   userId: string,
   config: CleanerConfig
@@ -177,7 +177,7 @@ export async function gcDuplicates(
 // --- Step 4: MEMORY.md Sync ---
 
 export async function syncMemoryMd(
-  client: QdrantClient,
+  client: Database.Database,
   userId: string,
   config: CleanerConfig
 ): Promise<boolean> {
@@ -215,7 +215,7 @@ export async function syncMemoryMd(
 // --- Full Clean ---
 
 export async function clean(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   userId: string,
   config: Partial<CleanerConfig> = {}

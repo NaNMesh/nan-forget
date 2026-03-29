@@ -5,13 +5,13 @@
  * 13 tools: memory_save, memory_search, memory_get, memory_update, memory_archive,
  *           memory_consolidate, memory_clean, memory_stats, memory_health, memory_start, memory_sync,
  *           memory_checkpoint, memory_compress
- * Runs over stdio. Connects to local Qdrant.
+ * Runs over stdio. Uses local SQLite database.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories, searchMemories } from '../qdrant.js';
+import { createDb, ensureSchema, getMemory, updateMemory, scrollMemories, searchMemories } from '../sqlite.js';
 import { checkHealth, startAll } from '../services.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
@@ -31,7 +31,6 @@ let lastConsolidateAt = Date.now();
 
 // --- Config from env ---
 
-const QDRANT_URL = process.env.NAN_FORGET_QDRANT_URL ?? 'http://localhost:6333';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? '';
 // Auto-detect: use OpenAI if key exists, otherwise Ollama (free, local)
 const EMBEDDING_PROVIDER = (
@@ -43,15 +42,17 @@ const PROJECT_ROOT = process.env.NAN_FORGET_PROJECT_ROOT ?? process.cwd();
 
 // --- Init ---
 
+import type Database from 'better-sqlite3';
+
 export interface ServerDeps {
-  client?: ReturnType<typeof createQdrantClient>;
+  client?: Database.Database;
   embedder?: ReturnType<typeof createEmbedder>;
   userId?: string;
   projectRoot?: string;
 }
 
-export function createServer(deps?: ServerDeps) {
-  const client = deps?.client ?? createQdrantClient(QDRANT_URL);
+export function createServer(deps?: ServerDeps): { server: McpServer; client: Database.Database; embedder: ReturnType<typeof createEmbedder> } {
+  const client = deps?.client ?? createDb();
   const embedder = deps?.embedder ?? createEmbedder({
     provider: EMBEDDING_PROVIDER,
     openaiApiKey: OPENAI_API_KEY,
@@ -81,7 +82,7 @@ export function createServer(deps?: ServerDeps) {
       concepts: z.array(z.string()).optional().describe('Key concepts for searchability (e.g. ["auth", "jwt", "middleware"])'),
     },
     async ({ content, type, project, tags, problem, solution, files, concepts }) => {
-      await ensureCollection(client, embedder.provider);
+      ensureSchema(client, embedder.provider);
 
       const result = await writeMemory(client, embedder, {
         content,
@@ -146,7 +147,7 @@ export function createServer(deps?: ServerDeps) {
       depth: z.number().min(1).max(3).optional().describe('Search depth: 1=blur, 2=clarity, 3=association. Default 2.'),
     },
     async ({ query, project, depth }) => {
-      await ensureCollection(client, embedder.provider);
+      ensureSchema(client, embedder.provider);
 
       const maxStage = (depth ?? 2) as 1 | 2 | 3;
       const result = await retrieve(client, embedder, query, {
@@ -296,7 +297,7 @@ export function createServer(deps?: ServerDeps) {
       project: z.string().optional().describe('Limit consolidation to a specific project'),
     },
     async ({ project }) => {
-      await ensureCollection(client, embedder.provider);
+      ensureSchema(client, embedder.provider);
 
       const result = await consolidate(client, embedder, userId, {
         project,
@@ -326,7 +327,7 @@ export function createServer(deps?: ServerDeps) {
     'Run garbage collection on memories. Archives decayed (unused) memories, removes expired ones, deduplicates near-identical entries, and syncs MEMORY.md. Use after consolidation or when memory feels cluttered.',
     {},
     async () => {
-      await ensureCollection(client, embedder.provider);
+      ensureSchema(client, embedder.provider);
 
       const result = await clean(client, embedder, userId, {
         project_root: projectRoot,
@@ -394,19 +395,19 @@ export function createServer(deps?: ServerDeps) {
   // ═══════════════════════════════════════
   server.tool(
     'memory_health',
-    'Check if nan-forget services are running (Qdrant, Ollama, REST API). Call this at the start of each session to verify everything is ready. If services are down, ask the user if they want to start them, then call memory_start.',
+    'Check if nan-forget services are running (Ollama, REST API). Call this at the start of each session to verify everything is ready. If services are down, ask the user if they want to start them, then call memory_start.',
     {},
     async () => {
       const status = await checkHealth();
       const lines = [
         'NaN Forget — Service Health',
         '',
-        `Qdrant:   ${status.qdrant ? '✓ running' : '✗ down'}`,
+        `SQLite:   ✓ (embedded)`,
         `Ollama:   ${status.ollama ? '✓ running' : '✗ down'}`,
         `REST API: ${status.api ? '✓ running' : '✗ down'}`,
       ];
 
-      const allUp = status.qdrant && status.ollama && status.api;
+      const allUp = status.ollama && status.api;
       if (!allUp) {
         lines.push('', 'Some services are down. Ask the user if they want to start them, then call memory_start.');
       } else {
@@ -424,7 +425,7 @@ export function createServer(deps?: ServerDeps) {
   // ═══════════════════════════════════════
   server.tool(
     'memory_start',
-    'Start all nan-forget services (Qdrant, Ollama, REST API). Only call this after the user confirms they want services started. Starts Docker containers, Ollama, and the REST API.',
+    'Start all nan-forget services (Ollama, REST API). Only call this after the user confirms they want services started. Starts Ollama and the REST API.',
     {},
     async () => {
       const result = await startAll();
@@ -432,12 +433,12 @@ export function createServer(deps?: ServerDeps) {
       const lines = [
         'NaN Forget — Starting Services',
         '',
-        `Qdrant:   ${result.qdrant.started ? '✓ started' : '✗ ' + (result.qdrant.error ?? 'failed')}`,
+        `SQLite:   ✓ (embedded)`,
         `Ollama:   ${result.ollama.started ? '✓ started' : '✗ ' + (result.ollama.error ?? 'failed')}`,
         `REST API: ${result.api.started ? '✓ started' : '✗ ' + (result.api.error ?? 'failed')}`,
       ];
 
-      const allUp = result.qdrant.started && result.ollama.started && result.api.started;
+      const allUp = result.ollama.started && result.api.started;
       if (allUp) {
         lines.push('', 'All services running. Memory system ready.');
       } else {
@@ -458,17 +459,17 @@ export function createServer(deps?: ServerDeps) {
     'IMPORTANT: Call this ONCE at the start of every session. Lightweight handshake — checks if services are running, reports how many memories are available, and shows recent memory summaries so you know what context exists. If services are down, ask the user to start them via memory_start.',
     {},
     async () => {
-      await ensureCollection(client, embedder.provider);
+      ensureSchema(client, embedder.provider);
 
       const parts: string[] = ['# NaN Forget — Ready\n'];
 
       // 1. Health check
       const health = await checkHealth();
-      const allUp = health.qdrant && (health.ollama || !!OPENAI_API_KEY);
+      const allUp = health.ollama || !!OPENAI_API_KEY;
       parts.push(`## Services`);
-      parts.push(`Qdrant: ${health.qdrant ? '✓' : '✗'} | Ollama: ${health.ollama ? '✓' : '✗'} | API: ${health.api ? '✓' : '✗'}`);
+      parts.push(`SQLite: ✓ | Ollama: ${health.ollama ? '✓' : '✗'} | API: ${health.api ? '✓' : '✗'}`);
       if (!allUp) {
-        parts.push('\nSome services are down. Ask the user if they want to start them, then call memory_start.');
+        parts.push('\nEmbedding service is down. Ask the user if they want to start Ollama, then call memory_start.');
       }
       parts.push('');
 
@@ -536,7 +537,7 @@ export function createServer(deps?: ServerDeps) {
       tags: z.array(z.string()).optional().describe('Additional tags'),
     },
     async ({ task_summary, problem, solution, files, concepts, project, tags }) => {
-      await ensureCollection(client, embedder.provider);
+      ensureSchema(client, embedder.provider);
 
       // Build rich content from structured fields
       const content = [
@@ -615,7 +616,7 @@ export function createServer(deps?: ServerDeps) {
       dry_run: z.boolean().optional().describe('Preview without compressing (default false)'),
     },
     async ({ dry_run }) => {
-      await ensureCollection(client, embedder.provider);
+      ensureSchema(client, embedder.provider);
 
       const { readdir, readFile: readF, writeFile: writeF } = await import('node:fs/promises');
       const { join, basename } = await import('node:path');
@@ -661,7 +662,7 @@ export function createServer(deps?: ServerDeps) {
               continue;
             }
 
-            // Check if content exists in Qdrant
+            // Check if content exists in DB
             try {
               const { vector } = await embedder.embed(body.slice(0, 2000));
               const matches = await searchMemories(

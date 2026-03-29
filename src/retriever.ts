@@ -3,9 +3,9 @@ import {
   recommendMemories,
   updateMemory,
   getMemory,
-} from './qdrant.js';
+} from './sqlite.js';
 import type { createEmbedder } from './embeddings.js';
-import type { QdrantClient } from '@qdrant/js-client-rest';
+import type Database from 'better-sqlite3';
 import type { Memory, MemorySearchFilters } from './types.js';
 
 // --- Types ---
@@ -71,7 +71,7 @@ export function adjustedScore(
 // --- Stage 1: Recognition (blur) ---
 
 export async function recognize(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   query: string,
   ctx: RetrievalContext,
@@ -117,7 +117,7 @@ export async function recognize(
 // --- Stage 2: Recall (clarity) ---
 
 export async function recall(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   query: string,
   ctx: RetrievalContext,
@@ -161,7 +161,7 @@ export async function recall(
 // --- Stage 3: Reconstruction (association / spreading activation) ---
 
 export async function reconstruct(
-  client: QdrantClient,
+  client: Database.Database,
   positiveIds: string[],
   ctx: RetrievalContext,
   limit = 5
@@ -185,7 +185,7 @@ export async function reconstruct(
 // --- Full Pipeline ---
 
 export async function retrieve(
-  client: QdrantClient,
+  client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,
   query: string,
   ctx: RetrievalContext,
@@ -242,7 +242,7 @@ export async function retrieve(
 
 // --- Touch (update access stats) ---
 
-async function touchMemories(client: QdrantClient, ids: string[]): Promise<void> {
+async function touchMemories(client: Database.Database, ids: string[]): Promise<void> {
   const now = new Date().toISOString();
   for (const id of ids) {
     const mem = await getMemory(client, id);
