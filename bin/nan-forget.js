@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -10,7 +10,8 @@ const src = resolve(__dirname, '..', 'src', 'cli', 'index.ts');
 
 if (existsSync(compiled)) {
   // Production: use compiled JS directly
-  const { run } = await import(compiled);
+  // pathToFileURL needed for Windows (C:\ paths → file:/// URLs)
+  const { run } = await import(pathToFileURL(compiled).href);
   await run();
 } else if (existsSync(src)) {
   // Development: use tsx for TypeScript
