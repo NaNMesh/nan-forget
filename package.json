@@ -1,6 +1,6 @@
 {
   "name": "nan-forget",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "mcpName": "io.github.NaNMesh/nan-forget",
   "description": "Long-term memory for AI coding tools. Your AI remembers decisions, preferences, and context across sessions — automatically.",
   "repository": {
