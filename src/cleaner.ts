@@ -54,7 +54,7 @@ export const DEFAULT_CONFIG: CleanerConfig = {
   decay_threshold: 0.1,
   dedup_similarity: 0.95,
   scan_limit: 500,
-  memory_md_per_project: 10,
+  memory_md_per_project: 5,
 };
 
 // --- Result ---

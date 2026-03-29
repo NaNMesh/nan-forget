@@ -2,15 +2,16 @@
 /**
  * NaN Forget MCP Server
  *
- * 11 tools: memory_save, memory_search, memory_get, memory_update, memory_archive,
- *           memory_consolidate, memory_clean, memory_stats, memory_health, memory_start, memory_sync
+ * 13 tools: memory_save, memory_search, memory_get, memory_update, memory_archive,
+ *           memory_consolidate, memory_clean, memory_stats, memory_health, memory_start, memory_sync,
+ *           memory_checkpoint, memory_compress
  * Runs over stdio. Connects to local Qdrant.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories } from '../qdrant.js';
+import { createQdrantClient, ensureCollection, getMemory, updateMemory, scrollMemories, searchMemories } from '../qdrant.js';
 import { checkHealth, startAll } from '../services.js';
 import { createEmbedder } from '../embeddings.js';
 import { writeMemory } from '../writer.js';
@@ -60,7 +61,7 @@ export function createServer(deps?: ServerDeps) {
 
   const server = new McpServer({
     name: 'nan-forget',
-    version: '0.4.0',
+    version: '0.5.0',
   });
 
   // ═══════════════════════════════════════
@@ -68,14 +69,18 @@ export function createServer(deps?: ServerDeps) {
   // ═══════════════════════════════════════
   server.tool(
     'memory_save',
-    'IMPORTANT: You MUST call this tool proactively whenever you learn a decision, preference, fact, or context worth remembering across sessions. Do NOT wait for the user to ask you to save — save immediately as you learn it. Examples: architecture decisions, tech stack choices, user preferences, project context, deployment configs, coding conventions. Deduplicates automatically — safe to call even if it might already exist.',
+    'IMPORTANT: You MUST call this tool proactively whenever you learn a decision, preference, fact, or context worth remembering across sessions. Do NOT wait for the user to ask you to save — save immediately as you learn it. Include structured fields (problem/solution/concepts) when relevant — these make memories more searchable and useful in future sessions. Deduplicates automatically — safe to call even if it might already exist.',
     {
-      content: z.string().describe('The full text of the memory to save'),
+      content: z.string().describe('The full text of the memory — include reasoning, context, and key details'),
       type: z.enum(['fact', 'decision', 'preference', 'task', 'context']).describe('Memory type'),
       project: z.string().describe('Project name this memory belongs to'),
       tags: z.array(z.string()).optional().describe('Optional tags for filtering'),
+      problem: z.string().optional().describe('What was the problem, question, or challenge? (makes search much better)'),
+      solution: z.string().optional().describe('How was it solved? What was the answer or approach?'),
+      files: z.array(z.string()).optional().describe('Files involved (e.g. ["src/auth.ts", "config.yaml"])'),
+      concepts: z.array(z.string()).optional().describe('Key concepts for searchability (e.g. ["auth", "jwt", "middleware"])'),
     },
-    async ({ content, type, project, tags }) => {
+    async ({ content, type, project, tags, problem, solution, files, concepts }) => {
       await ensureCollection(client, embedder.provider);
 
       const result = await writeMemory(client, embedder, {
@@ -84,6 +89,10 @@ export function createServer(deps?: ServerDeps) {
         project,
         tags,
         user_id: userId,
+        problem,
+        solution,
+        files,
+        concepts,
       });
 
       // Also add to MEMORY.md
@@ -159,6 +168,10 @@ export function createServer(deps?: ServerDeps) {
         for (const r of result.recall) {
           parts.push(`### ${r.memory.summary} (${r.memory.type})`);
           parts.push(`> ${r.memory.content}`);
+          if (r.memory.problem) parts.push(`**Problem:** ${r.memory.problem}`);
+          if (r.memory.solution) parts.push(`**Solution:** ${r.memory.solution}`);
+          if (r.memory.files?.length) parts.push(`**Files:** ${r.memory.files.join(', ')}`);
+          if (r.memory.concepts?.length) parts.push(`**Concepts:** ${r.memory.concepts.join(', ')}`);
           parts.push(`score: ${r.adjusted_score.toFixed(3)} | project: ${r.memory.project} | tags: ${(r.memory.tags ?? []).join(', ')} | id: ${r.memory.id}`);
           parts.push('');
         }
@@ -503,6 +516,199 @@ export function createServer(deps?: ServerDeps) {
 
       return {
         content: [{ type: 'text' as const, text: parts.join('\n') }],
+      };
+    }
+  );
+
+  // ═══════════════════════════════════════
+  // Tool 12: memory_checkpoint
+  // ═══════════════════════════════════════
+  server.tool(
+    'memory_checkpoint',
+    'Call this BEFORE telling the user a task is done. Captures the full problem→solution context as a structured memory for future sessions. Use after: bug fixes, feature implementations, refactors, config changes, architecture decisions. Every completed task = one checkpoint.',
+    {
+      task_summary: z.string().describe('One-line: what was accomplished'),
+      problem: z.string().describe('What was the issue, question, or goal'),
+      solution: z.string().describe('How it was solved — approach, key details, why this approach'),
+      files: z.array(z.string()).describe('Files created or modified'),
+      concepts: z.array(z.string()).describe('Searchable concepts (e.g. ["auth", "jwt", "middleware"])'),
+      project: z.string().describe('Project name'),
+      tags: z.array(z.string()).optional().describe('Additional tags'),
+    },
+    async ({ task_summary, problem, solution, files, concepts, project, tags }) => {
+      await ensureCollection(client, embedder.provider);
+
+      // Build rich content from structured fields
+      const content = [
+        task_summary,
+        '',
+        `Problem: ${problem}`,
+        '',
+        `Solution: ${solution}`,
+        '',
+        files.length > 0 ? `Files: ${files.join(', ')}` : '',
+      ].filter(Boolean).join('\n');
+
+      const result = await writeMemory(client, embedder, {
+        content,
+        type: 'fact' as MemoryType,
+        project,
+        tags: ['checkpoint', 'task-completion', ...(tags ?? [])],
+        source: 'agent',
+        user_id: userId,
+        problem,
+        solution,
+        files,
+        concepts,
+      });
+
+      // Add to MEMORY.md
+      if (!result.deduplicated) {
+        const mem = await getMemory(client, result.id);
+        if (mem) {
+          let state = await readMemoryMd(projectRoot);
+          state = addLine(state, {
+            type: mem.type,
+            summary: mem.summary,
+            engram_id: mem.id,
+            project: mem.project,
+          });
+          await writeMemoryMd(state, projectRoot);
+        }
+      }
+
+      // Auto-consolidate check
+      savesSinceConsolidate++;
+      const hoursSinceClean = (Date.now() - lastConsolidateAt) / (1000 * 60 * 60);
+      if (savesSinceConsolidate >= 10 || hoursSinceClean >= 24) {
+        savesSinceConsolidate = 0;
+        lastConsolidateAt = Date.now();
+        consolidate(client, embedder, userId, { project_root: projectRoot })
+          .then(() => clean(client, embedder, userId, { project_root: projectRoot }))
+          .catch((err) => console.error('Auto-consolidate failed:', err));
+      }
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: result.deduplicated
+            ? `Checkpoint merged with existing memory: ${result.id}`
+            : [
+                `Checkpoint saved: ${result.id}`,
+                `  Problem: ${problem.slice(0, 100)}`,
+                `  Solution: ${solution.slice(0, 100)}`,
+                `  Files: ${files.join(', ')}`,
+                `  Concepts: ${concepts.join(', ')}`,
+              ].join('\n'),
+        }],
+      };
+    }
+  );
+
+  // ═══════════════════════════════════════
+  // Tool 13: memory_compress
+  // ═══════════════════════════════════════
+  server.tool(
+    'memory_compress',
+    'Compress local .md memory files that have been persisted to the DB. Replaces redundant files with minimal stubs to keep context window clean. Call after a long session or when context feels bloated.',
+    {
+      dry_run: z.boolean().optional().describe('Preview without compressing (default false)'),
+    },
+    async ({ dry_run }) => {
+      await ensureCollection(client, embedder.provider);
+
+      const { readdir, readFile: readF, writeFile: writeF } = await import('node:fs/promises');
+      const { join, basename } = await import('node:path');
+      const { homedir } = await import('node:os');
+
+      const claudeDir = join(homedir(), '.claude', 'projects');
+      let totalFound = 0;
+      let alreadyCompressed = 0;
+      let compressed = 0;
+      let notInDb = 0;
+      const details: string[] = [];
+
+      try {
+        const projects = await readdir(claudeDir).catch(() => [] as string[]);
+
+        for (const proj of projects) {
+          const memoryDir = join(claudeDir, proj, 'memory');
+          let files: string[];
+          try {
+            files = await readdir(memoryDir);
+          } catch {
+            continue; // No memory dir for this project
+          }
+
+          const mdFiles = files.filter(f => f.endsWith('.md') && f !== 'MEMORY.md');
+          totalFound += mdFiles.length;
+
+          for (const file of mdFiles) {
+            const filePath = join(memoryDir, file);
+            const content = await readF(filePath, 'utf-8');
+
+            // Check if already compressed
+            if (content.includes('persisted: true')) {
+              alreadyCompressed++;
+              continue;
+            }
+
+            // Parse body (skip frontmatter)
+            const parts = content.split('---');
+            const body = parts.length >= 3 ? parts.slice(2).join('---').trim() : content.trim();
+            if (!body || body.length < 10) {
+              alreadyCompressed++;
+              continue;
+            }
+
+            // Check if content exists in Qdrant
+            try {
+              const { vector } = await embedder.embed(body.slice(0, 2000));
+              const matches = await searchMemories(
+                client, vector,
+                { user_id: userId, status: 'active', embedding_provider: embedder.provider },
+                1
+              );
+
+              if (matches.length > 0 && matches[0].score > 0.9) {
+                // Content is in DB — safe to compress
+                if (!dry_run) {
+                  // Extract type from frontmatter
+                  const typeMatch = content.match(/^type:\s*(.+)$/m);
+                  const origType = typeMatch?.[1]?.trim() ?? 'fact';
+                  const stub = `---\ntype: ${origType}\npersisted: true\n---\nPersisted to nan-forget DB. Use memory_search to retrieve.\n`;
+                  await writeF(filePath, stub, 'utf-8');
+                }
+                compressed++;
+                details.push(`${dry_run ? 'Would compress' : 'Compressed'}: ${proj}/${file}`);
+              } else {
+                notInDb++;
+              }
+            } catch {
+              notInDb++;
+            }
+          }
+        }
+      } catch (err) {
+        return {
+          content: [{ type: 'text' as const, text: `Error scanning memory files: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+
+      const lines = [
+        `Memory compression ${dry_run ? '(dry run)' : 'complete'}:`,
+        `  Files found:        ${totalFound}`,
+        `  Already compressed: ${alreadyCompressed}`,
+        `  ${dry_run ? 'Would compress' : 'Compressed'}:    ${compressed}`,
+        `  Not in DB (kept):   ${notInDb}`,
+      ];
+      if (details.length > 0) {
+        lines.push('', ...details);
+      }
+
+      return {
+        content: [{ type: 'text' as const, text: lines.join('\n') }],
       };
     }
   );

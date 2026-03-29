@@ -20,6 +20,14 @@ export interface WriteMemoryInput {
   tags?: string[];
   source?: MemorySource;
   user_id: string;
+  /** What was the problem / question / challenge */
+  problem?: string;
+  /** How was it solved / what was the answer */
+  solution?: string;
+  /** Files involved */
+  files?: string[];
+  /** Searchable concepts */
+  concepts?: string[];
 }
 
 export interface WriteResult {
@@ -33,8 +41,12 @@ export async function writeMemory(
   embedder: ReturnType<typeof createEmbedder>,
   input: WriteMemoryInput
 ): Promise<WriteResult> {
-  // 1. Generate embedding
-  const { vector, provider, model } = await embedder.embed(input.content);
+  // 1. Generate embedding — include structured fields for richer vector
+  const embeddingParts = [input.content];
+  if (input.problem) embeddingParts.push(`Problem: ${input.problem}`);
+  if (input.solution) embeddingParts.push(`Solution: ${input.solution}`);
+  if (input.concepts?.length) embeddingParts.push(`Concepts: ${input.concepts.join(', ')}`);
+  const { vector, provider, model } = await embedder.embed(embeddingParts.join('\n'));
 
   // 2. Dedup check — search for >0.92 cosine match
   const candidates = await searchMemories(
@@ -91,6 +103,10 @@ export async function writeMemory(
     last_accessed: now,
     embedding_provider: provider,
     embedding_model: model,
+    ...(input.problem ? { problem: input.problem } : {}),
+    ...(input.solution ? { solution: input.solution } : {}),
+    ...(input.files?.length ? { files: input.files } : {}),
+    ...(input.concepts?.length ? { concepts: input.concepts } : {}),
   };
 
   // 5. Save to Qdrant

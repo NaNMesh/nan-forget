@@ -6,11 +6,12 @@
  * 1. Checks if the file is a memory .md file
  * 2. Parses the YAML frontmatter for type
  * 3. Calls nan-forget add to save it to Qdrant (long-term memory)
+ * 4. On success, compresses the local file to a minimal stub
  *
  * Portable: works on macOS, Linux, Windows (Node.js, no bash dependencies).
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { execFile } from 'child_process';
 import { basename } from 'path';
 
@@ -28,11 +29,21 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
 
+    // Never compress MEMORY.md
+    if (basename(filePath) === 'MEMORY.md') {
+      process.exit(0);
+    }
+
     // Read the file
     let content;
     try {
       content = readFileSync(filePath, 'utf-8');
     } catch {
+      process.exit(0);
+    }
+
+    // Skip already-compressed files
+    if (content.includes('persisted: true')) {
       process.exit(0);
     }
 
@@ -71,14 +82,22 @@ process.stdin.on('end', () => {
     const tags = ['auto-sync', 'claude-memory'];
     if (name) tags.push(name.slice(0, 50));
 
-    // Save to nan-forget (fire and forget)
+    // Save to nan-forget — compress local file on success
     execFile('npx', [
       'nan-forget', 'add', truncated,
       '--type', nfType,
       '--project', project,
       '--tags', tags.join(','),
-    ], { timeout: 15000 }, () => {
-      // Ignore errors — don't block Claude
+    ], { timeout: 15000 }, (error) => {
+      // On success: compress the local .md file to a stub
+      if (!error && filePath.includes('.claude/') && filePath.includes('/memory/')) {
+        try {
+          const stub = `---\ntype: ${rawType}\npersisted: true\n---\nPersisted to nan-forget DB. Use memory_search to retrieve.\n`;
+          writeFileSync(filePath, stub, 'utf-8');
+        } catch {
+          // Can't compress — leave original intact
+        }
+      }
     });
 
   } catch {

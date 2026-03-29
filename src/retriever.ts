@@ -21,6 +21,8 @@ export interface RecognitionResult {
   summary: string;
   type: Memory['type'];
   tags: string[];
+  concepts: string[];
+  project: string;
   score: number;
   adjusted_score: number;
 }
@@ -89,7 +91,7 @@ export async function recognize(
     vector,
     filters,
     limit * 3, // prefetch more, then rank by adjusted score
-    ['summary', 'type', 'tags', 'access_count', 'last_accessed']
+    ['summary', 'type', 'tags', 'concepts', 'project', 'access_count', 'last_accessed']
   );
 
   const scored = results.map((r) => ({
@@ -97,6 +99,8 @@ export async function recognize(
     summary: r.memory.summary,
     type: r.memory.type,
     tags: r.memory.tags ?? [],
+    concepts: r.memory.concepts ?? [],
+    project: r.memory.project ?? '_global',
     score: r.score,
     adjusted_score: adjustedScore(
       r.score,

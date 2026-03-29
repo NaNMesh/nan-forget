@@ -45,6 +45,7 @@ async function createPayloadIndexes(client: QdrantClient): Promise<void> {
     'status',
     'tags',
     'embedding_provider',
+    'concepts',
   ];
   const datetimeFields = ['created_at', 'last_accessed'];
   const integerFields = ['access_count'];

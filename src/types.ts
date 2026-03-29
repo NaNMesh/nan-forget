@@ -21,6 +21,14 @@ export interface Memory {
   embedding_provider: EmbeddingProvider;
   embedding_model: string;
   consolidated_from?: string[];
+  /** What was the problem / question / challenge */
+  problem?: string;
+  /** How was it solved / what was the answer */
+  solution?: string;
+  /** Files involved in this memory */
+  files?: string[];
+  /** Searchable concepts (architecture, auth, deploy, etc.) */
+  concepts?: string[];
 }
 
 export type MemoryPayload = Omit<Memory, 'id'>;

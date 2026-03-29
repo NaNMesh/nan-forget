@@ -72,7 +72,7 @@ describe('MCP Server', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('lists all 11 tools', async () => {
+  it('lists all 13 tools', async () => {
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name);
     expect(names).toContain('memory_save');
@@ -86,7 +86,9 @@ describe('MCP Server', () => {
     expect(names).toContain('memory_health');
     expect(names).toContain('memory_start');
     expect(names).toContain('memory_sync');
-    expect(names).toHaveLength(11);
+    expect(names).toContain('memory_checkpoint');
+    expect(names).toContain('memory_compress');
+    expect(names).toHaveLength(13);
   });
 
   it('memory_save creates a memory', async () => {

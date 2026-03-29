@@ -427,6 +427,8 @@ process.stdin.on('end', () => {
     'mcp__nan-forget__memory_stats',
     'mcp__nan-forget__memory_health',
     'mcp__nan-forget__memory_start',
+    'mcp__nan-forget__memory_checkpoint',
+    'mcp__nan-forget__memory_compress',
   ];
 
   try {

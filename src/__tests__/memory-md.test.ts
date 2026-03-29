@@ -92,13 +92,13 @@ describe('addLine', () => {
     expect(next.lines.length).toBe(1);
   });
 
-  it('evicts oldest when over 30 lines', () => {
-    const lines: MemoryLine[] = Array.from({ length: 30 }, (_, i) =>
+  it('evicts oldest when over 15 lines', () => {
+    const lines: MemoryLine[] = Array.from({ length: 15 }, (_, i) =>
       makeLine('fact', `Memory ${i}`, `id${i}`, 'p')
     );
     const state: MemoryMdState = { lines };
     const next = addLine(state, makeLine('fact', 'New one', 'new-id', 'p'));
-    expect(next.lines.length).toBe(30);
+    expect(next.lines.length).toBe(15);
     // First line (id0) should be gone
     expect(next.lines.find((l) => l.engram_id === 'id0')).toBeUndefined();
     // New line should be present
@@ -173,11 +173,11 @@ describe('helpers', () => {
     expect(lineCount({ lines: [makeLine(), makeLine('fact', 'B', 'id2')] })).toBe(2);
   });
 
-  it('isFull returns true at 30', () => {
-    const lines = Array.from({ length: 30 }, (_, i) =>
+  it('isFull returns true at 15', () => {
+    const lines = Array.from({ length: 15 }, (_, i) =>
       makeLine('fact', `M${i}`, `id${i}`)
     );
     expect(isFull({ lines })).toBe(true);
-    expect(isFull({ lines: lines.slice(0, 29) })).toBe(false);
+    expect(isFull({ lines: lines.slice(0, 14) })).toBe(false);
   });
 });

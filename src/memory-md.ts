@@ -37,7 +37,7 @@ export interface MemoryMdState {
 
 // --- Constants ---
 
-const MAX_LINES = 30;
+const MAX_LINES = 15;
 const HEADER = `# NaN Forget — Working Memory
 <!-- Auto-managed. Do not edit manually. -->`;
 
