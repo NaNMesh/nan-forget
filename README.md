@@ -296,6 +296,7 @@ All data lives in a single SQLite file at `~/.nan-forget/memories.db`. No Docker
 - **Vector search**: [sqlite-vec](https://github.com/asg017/sqlite-vec) extension (cosine distance, embedded in process)
 - **Metadata**: Standard SQL tables with indexes on `user_id`, `status`, `project`, `type`
 - **Backup**: Copy one file. **Restore**: Put it back.
+- **Export**: `nan-forget export` dumps all memories as JSON.
 
 ## Memory Lifecycle
 
