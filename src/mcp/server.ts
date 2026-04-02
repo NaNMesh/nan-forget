@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { createDb, ensureSchema, getMemory, updateMemory, scrollMemories, searchMemories } from '../sqlite.js';
 import { checkHealth, startAll } from '../services.js';
 import { createEmbedder } from '../embeddings.js';
-import { writeMemory } from '../writer.js';
+import { buildCheckpointContent, writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
 import { clean } from '../cleaner.js';
 import { consolidate } from '../consolidator.js';
@@ -540,15 +540,7 @@ export function createServer(deps?: ServerDeps): { server: McpServer; client: Da
       ensureSchema(client, embedder.provider);
 
       // Build rich content from structured fields
-      const content = [
-        task_summary,
-        '',
-        `Problem: ${problem}`,
-        '',
-        `Solution: ${solution}`,
-        '',
-        files.length > 0 ? `Files: ${files.join(', ')}` : '',
-      ].filter(Boolean).join('\n');
+      const content = buildCheckpointContent(task_summary, problem, solution, files);
 
       const result = await writeMemory(client, embedder, {
         content,

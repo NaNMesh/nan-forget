@@ -8,13 +8,14 @@
  */
 
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createDb, ensureSchema, getMemory, updateMemory, scrollMemories, searchMemories } from '../sqlite.js';
+import { createDb, ensureSchema, getMemory, updateMemory, scrollMemories } from '../sqlite.js';
 import { createEmbedder } from '../embeddings.js';
-import { writeMemory } from '../writer.js';
+import { buildCheckpointContent, writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
 import { clean } from '../cleaner.js';
 import { consolidate } from '../consolidator.js';
 import type { MemoryType } from '../types.js';
+import type Database from 'better-sqlite3';
 
 // --- Config ---
 
@@ -26,6 +27,13 @@ const EMBEDDING_PROVIDER = (
 const USER_ID = process.env.NAN_FORGET_USER_ID ?? 'default';
 const PROJECT_ROOT = process.env.NAN_FORGET_PROJECT_ROOT ?? process.cwd();
 const PORT = parseInt(process.env.NAN_FORGET_API_PORT ?? '3456', 10);
+
+interface ApiServerOptions {
+  client?: Database.Database;
+  embedder?: ReturnType<typeof createEmbedder>;
+  userId?: string;
+  projectRoot?: string;
+}
 
 // --- Helpers ---
 
@@ -58,14 +66,22 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
   });
 }
 
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.map((item) => String(item).trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
 // --- Router ---
 
-export function startApiServer(port = PORT) {
-  const client = createDb();
-  const embedder = createEmbedder({
+export function startApiServer(port = PORT, options: ApiServerOptions = {}) {
+  const client = options.client ?? createDb();
+  const embedder = options.embedder ?? createEmbedder({
     provider: EMBEDDING_PROVIDER,
     openaiApiKey: OPENAI_API_KEY,
   });
+  const userId = options.userId ?? USER_ID;
+  const projectRoot = options.projectRoot ?? PROJECT_ROOT;
 
   const server = createHttpServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
@@ -92,14 +108,55 @@ export function startApiServer(port = PORT) {
         const content = body.content as string;
         const type = body.type as MemoryType;
         const project = body.project as string;
-        const tags = body.tags as string[] | undefined;
+        const tags = stringArray(body.tags);
+        const problem = body.problem as string | undefined;
+        const solution = body.solution as string | undefined;
+        const files = stringArray(body.files);
+        const concepts = stringArray(body.concepts);
 
         if (!content || !type || !project) {
           return error(res, 'Required: content, type, project');
         }
 
         const result = await writeMemory(client, embedder, {
-          content, type, project, tags, user_id: USER_ID,
+          content,
+          type,
+          project,
+          tags,
+          user_id: userId,
+          problem,
+          solution,
+          files,
+          concepts,
+        });
+        return json(res, result, 201);
+      }
+
+      // POST /memories/checkpoint — save completed-task context
+      if (method === 'POST' && path === '/memories/checkpoint') {
+        const body = await readBody(req);
+        const taskSummary = body.task_summary as string;
+        const problem = body.problem as string;
+        const solution = body.solution as string;
+        const project = body.project as string;
+        const files = stringArray(body.files) ?? [];
+        const concepts = stringArray(body.concepts) ?? [];
+        const tags = stringArray(body.tags) ?? [];
+
+        if (!taskSummary || !problem || !solution || !project || concepts.length === 0) {
+          return error(res, 'Required: task_summary, problem, solution, project, concepts');
+        }
+
+        const result = await writeMemory(client, embedder, {
+          content: buildCheckpointContent(taskSummary, problem, solution, files),
+          type: 'fact',
+          project,
+          tags: ['checkpoint', 'task-completion', ...tags],
+          user_id: userId,
+          problem,
+          solution,
+          files,
+          concepts,
         });
         return json(res, result, 201);
       }
@@ -113,15 +170,15 @@ export function startApiServer(port = PORT) {
         const depth = parseInt(url.searchParams.get('depth') ?? '2', 10) as 1 | 2 | 3;
 
         const result = await retrieve(client, embedder, query, {
-          user_id: USER_ID, project,
+          user_id: userId, project,
         }, { maxStage: depth, limit: 5 });
         return json(res, result);
       }
 
       // GET /memories/stats
       if (method === 'GET' && path === '/memories/stats') {
-        const active = await scrollMemories(client, { user_id: USER_ID, status: 'active' }, 1000);
-        const archived = await scrollMemories(client, { user_id: USER_ID, status: 'archived' }, 1000);
+        const active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
+        const archived = await scrollMemories(client, { user_id: userId, status: 'archived' }, 1000);
 
         const byType: Record<string, number> = {};
         const byProject: Record<string, number> = {};
@@ -145,16 +202,16 @@ export function startApiServer(port = PORT) {
       // POST /memories/consolidate
       if (method === 'POST' && path === '/memories/consolidate') {
         const body = await readBody(req);
-        const result = await consolidate(client, embedder, USER_ID, {
+        const result = await consolidate(client, embedder, userId, {
           project: body.project as string | undefined,
-          project_root: PROJECT_ROOT,
+          project_root: projectRoot,
         });
         return json(res, result);
       }
 
       // POST /memories/sync — lightweight handshake (health + stats, no search)
       if (method === 'POST' && path === '/memories/sync') {
-        const active = await scrollMemories(client, { user_id: USER_ID, status: 'active' }, 1000);
+        const active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
         const byProject: Record<string, number> = {};
         for (const m of active) {
           byProject[m.project] = (byProject[m.project] ?? 0) + 1;
@@ -179,8 +236,8 @@ export function startApiServer(port = PORT) {
 
       // POST /memories/clean
       if (method === 'POST' && path === '/memories/clean') {
-        const result = await clean(client, embedder, USER_ID, {
-          project_root: PROJECT_ROOT,
+        const result = await clean(client, embedder, userId, {
+          project_root: projectRoot,
         });
         return json(res, result);
       }
@@ -204,6 +261,11 @@ export function startApiServer(port = PORT) {
         if (body.content !== undefined) updates.content = body.content;
         if (body.type !== undefined) updates.type = body.type;
         if (body.tags !== undefined) updates.tags = body.tags;
+        if (body.project !== undefined) updates.project = body.project;
+        if (body.problem !== undefined) updates.problem = body.problem;
+        if (body.solution !== undefined) updates.solution = body.solution;
+        if (body.files !== undefined) updates.files = stringArray(body.files) ?? [];
+        if (body.concepts !== undefined) updates.concepts = stringArray(body.concepts) ?? [];
 
         await updateMemory(client, patchMatch[1], updates);
         return json(res, { updated: patchMatch[1] });
@@ -234,6 +296,7 @@ export function startApiServer(port = PORT) {
     console.error(`NaN Forget REST API running on http://localhost:${port}`);
     console.error('Endpoints:');
     console.error('  POST   /memories              — save a memory');
+    console.error('  POST   /memories/checkpoint   — save a completed-task memory');
     console.error('  GET    /memories/search?q=...  — search memories');
     console.error('  GET    /memories/:id           — get by ID');
     console.error('  PATCH  /memories/:id           — update');
@@ -257,18 +320,28 @@ export function getSystemPrompt(host = 'http://localhost:3456'): string {
 
 2. DURING THE SESSION — SEARCH: Whenever you encounter a topic that may have prior context (auth, deployment, testing, architecture, tooling, etc.), call GET ${host}/memories/search?q=<topic> IMMEDIATELY. Do NOT wait for the user to ask. Think of this as your long-term recall — use it whenever a topic might have been discussed before, in ANY project.
 
-3. DURING THE SESSION — SAVE: Call POST ${host}/memories with {"content": "<what you learned>", "type": "<fact|decision|preference|task|context>", "project": "<project name>"} immediately whenever you learn a decision, preference, fact, or context worth remembering. Do NOT wait. Save as you go.
+3. DURING THE SESSION — SAVE: Call POST ${host}/memories immediately whenever you learn a decision, preference, fact, or context worth remembering. Do NOT wait. Save as you go. Use this JSON shape:
+   {"content":"<what you learned>","type":"<fact|decision|preference|task|context>","project":"<project name>","tags":["optional"],"problem":"optional","solution":"optional","files":["optional"],"concepts":["optional"]}
+
+4. BEFORE TELLING THE USER A TASK IS DONE: Call POST ${host}/memories/checkpoint with {"task_summary":"<what you finished>","problem":"<what was hard>","solution":"<how you solved it>","files":["file paths"],"concepts":["searchable concepts"],"project":"<project name>","tags":["optional"]}. Every completed task should create one checkpoint.
 
 API Reference:
-  POST   ${host}/memories              — Save a memory {content, type, project, tags?}
-  POST   ${host}/memories/sync         — Load session context {project?, query?}
+  POST   ${host}/memories              — Save a memory {content, type, project, tags?, problem?, solution?, files?, concepts?}
+  POST   ${host}/memories/checkpoint   — Save completed-task context {task_summary, problem, solution, files, concepts, project, tags?}
+  POST   ${host}/memories/sync         — Lightweight handshake
   GET    ${host}/memories/search?q=... — Search memories
   GET    ${host}/memories/:id          — Get by ID
-  PATCH  ${host}/memories/:id          — Update {content?, type?, tags?}
+  PATCH  ${host}/memories/:id          — Update {content?, type?, tags?, project?, problem?, solution?, files?, concepts?}
   DELETE ${host}/memories/:id          — Archive (soft delete)
   POST   ${host}/memories/consolidate  — Compact aging memories (usually automatic)
   POST   ${host}/memories/clean        — Garbage collection (usually automatic)
   GET    ${host}/memories/stats        — Memory health metrics
+
+CLI fallback if REST is unavailable but shell access exists:
+  nan-forget sync
+  nan-forget search "<topic>"
+  nan-forget add --type decision --project "<project>" --problem "..." --solution "..." --concepts auth,jwt --files src/auth.ts "..."
+  nan-forget checkpoint --summary "..." --problem "..." --solution "..." --files src/auth.ts --concepts auth,jwt --project "<project>"
 
 Memory types: fact, decision, preference, task, context
 Context management is automatic — consolidation and cleanup happen after every 10 saves.`;

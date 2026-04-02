@@ -36,6 +36,22 @@ export interface WriteResult {
   existing_id?: string;
 }
 
+export function buildCheckpointContent(
+  taskSummary: string,
+  problem: string,
+  solution: string,
+  files: string[] = []
+): string {
+  return [
+    taskSummary,
+    '',
+    `Problem: ${problem}`,
+    '',
+    `Solution: ${solution}`,
+    ...(files.length > 0 ? ['', `Files: ${files.join(', ')}`] : []),
+  ].join('\n');
+}
+
 export async function writeMemory(
   client: Database.Database,
   embedder: ReturnType<typeof createEmbedder>,

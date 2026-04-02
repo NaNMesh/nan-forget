@@ -26,7 +26,7 @@
     "mcp",
     "memory",
     "llm",
-    "qdrant",
+    "sqlite",
     "claude",
     "ai-memory",
     "long-term-memory",
@@ -41,8 +41,8 @@
     "bin",
     "src",
     ".claude/commands",
+    "AGENTS.md",
     "CLAUDE.md",
-    "docker-compose.yml",
     "README.md"
   ],
   "dependencies": {

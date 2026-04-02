@@ -19,6 +19,8 @@ import { writeMemory } from '../writer.js';
 import {
   cmdAdd,
   cmdSearch,
+  cmdSync,
+  cmdCheckpoint,
   cmdGet,
   cmdList,
   cmdUpdate,
@@ -28,6 +30,7 @@ import {
   cmdExport,
   run,
   setTestDb,
+  setTestEmbedder,
 } from '../cli/index.js';
 
 const client = createDb(':memory:');
@@ -65,6 +68,7 @@ function createTestEmbedder() {
 
 const embedder = createTestEmbedder();
 const USER_ID = 'default'; // CLI default
+setTestEmbedder(embedder as any);
 
 let seededId: string;
 
@@ -144,6 +148,48 @@ describe('CLI Commands', () => {
     expect(output).toContain('archived');
   });
 
+  it('cmdAdd saves structured fields', async () => {
+    const output = await cmdAdd([
+      '--type', 'decision',
+      '--project', 'cli-test',
+      '--problem', 'The auth layer kept losing cross-session context',
+      '--solution', 'Persisted auth decisions as structured memories',
+      '--files', 'src/auth.ts,src/session.ts',
+      '--concepts', 'auth,memory',
+      'We store auth decisions in nan-forget',
+    ]);
+
+    expect(output).toContain('saved');
+    const id = output.match(/saved: ([\w-]+)/i)?.[1];
+    expect(id).toBeTruthy();
+
+    const saved = JSON.parse(await cmdGet([id!]));
+    expect(saved.problem).toContain('cross-session context');
+    expect(saved.solution).toContain('structured memories');
+    expect(saved.files).toEqual(['src/auth.ts', 'src/session.ts']);
+    expect(saved.concepts).toEqual(['auth', 'memory']);
+  });
+
+  it('cmdCheckpoint saves task completion context', async () => {
+    const output = await cmdCheckpoint([
+      '--summary', 'Added Codex fallback commands',
+      '--problem', 'Codex sessions did not have memory tool parity',
+      '--solution', 'Added sync and checkpoint CLI commands plus structured add support',
+      '--files', 'src/cli/index.ts,AGENTS.md',
+      '--concepts', 'codex,memory,cli',
+      '--project', 'cli-test',
+    ]);
+
+    expect(output).toContain('Checkpoint saved');
+    const id = output.match(/saved: ([\w-]+)/i)?.[1];
+    expect(id).toBeTruthy();
+
+    const saved = JSON.parse(await cmdGet([id!]));
+    expect(saved.tags).toContain('checkpoint');
+    expect(saved.problem).toContain('tool parity');
+    expect(saved.concepts).toEqual(['codex', 'memory', 'cli']);
+  });
+
   it('cmdStats shows counts', async () => {
     const output = await cmdStats([]);
     expect(output).toContain('Active:');
@@ -156,6 +202,13 @@ describe('CLI Commands', () => {
     const parsed = JSON.parse(output);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed.length).toBeGreaterThan(0);
+  });
+
+  it('cmdSync prints handshake context', async () => {
+    const output = await cmdSync([]);
+    expect(output).toContain('NaN Forget — Ready');
+    expect(output).toContain('Memory Bank');
+    expect(output).toContain('Ready');
   });
 
   it('run with --help prints usage', async () => {

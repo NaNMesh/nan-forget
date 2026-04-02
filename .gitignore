@@ -4,3 +4,4 @@ dist/
 *.tsbuildinfo
 .qdrant_data/
 .mcpregistry_*
+drafts/

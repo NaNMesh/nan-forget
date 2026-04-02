@@ -9,7 +9,7 @@
  * 4. Saves initial memories
  * 5. Creates MEMORY.md
  * 6. Writes MCP config for Claude Code
- * 7. Installs hooks
+ * 7. Installs hooks + agent instruction files for Claude/Codex
  */
 
 import { createInterface } from 'node:readline';
@@ -248,7 +248,7 @@ async function ensureDotEnv(provider: string, openaiKey: string): Promise<void> 
   await writeFile(envPath, lines.join('\n') + '\n', 'utf-8');
 }
 
-// --- Hooks + CLAUDE.md ---
+// --- Hooks + instruction files ---
 
 async function installHooksAndClaudeMd(): Promise<void> {
   const projectDir = process.cwd();
@@ -459,6 +459,36 @@ Fully automatic. Consolidation and cleanup run after every 10 saves or 24h.
       await writeFile(claudeMdDest, claudeMd, 'utf-8');
     }
   }
+
+  // Copy AGENTS.md to project root if not exists
+  const agentsMdDest = join(projectDir, 'AGENTS.md');
+  const agentsMdSrc = join(resolve(__dirname, '..', '..'), 'AGENTS.md');
+  try {
+    await access(agentsMdDest);
+    // Already exists, don't overwrite
+  } catch {
+    try {
+      await copyFile(agentsMdSrc, agentsMdDest);
+    } catch {
+      const agentsMd = `# NaN Forget — AI Long-Term Memory (MANDATORY)
+
+## Rules (Non-Negotiable)
+
+1. **At session start**: Call \`memory_sync\` ONCE. This is a lightweight handshake — it checks services and tells you how many memories exist. It does NOT search.
+2. **During the session — SEARCH**: Whenever you encounter a topic that may have prior context, call \`memory_search\` immediately. Do NOT wait for the user to ask.
+3. **During the session — SAVE**: Call \`memory_save\` immediately whenever you learn a decision, preference, fact, or context. Do NOT wait. Do NOT batch. Save as you go.
+4. **If \`memory_*\` tools are unavailable in this client**: use nan-forget locally instead of skipping memory:
+   - \`nan-forget sync\`
+   - \`nan-forget search "<topic>"\`
+   - \`nan-forget add --type <type> --project "<project>" --problem "..." --solution "..." --concepts c1,c2 --files f1,f2 "<content>"\`
+   - \`nan-forget checkpoint --summary "..." --problem "..." --solution "..." --files f1,f2 --concepts c1,c2 --project "<project>"\`
+5. **If services are down**: ask the user, then run \`nan-forget start\`.
+
+Use structured fields whenever possible so future searches can recover the full problem→solution context.
+`;
+      await writeFile(agentsMdDest, agentsMd, 'utf-8');
+    }
+  }
 }
 
 // --- Main ---
@@ -559,10 +589,11 @@ export async function setup(): Promise<void> {
   await ensureDotEnv(provider, openaiKey);
   console.log('  ✓ .env created');
 
-  // ── Step 6: Install Claude Code hooks + CLAUDE.md ──
+  // ── Step 6: Install Claude Code hooks + instruction files ──
   await installHooksAndClaudeMd();
   console.log('  ✓ Claude Code hooks installed');
   console.log('  ✓ CLAUDE.md created');
+  console.log('  ✓ AGENTS.md created');
 
   // ── Step 7: Install global slash command ──
   const globalCommandsDir = join(homedir(), '.claude', 'commands');
@@ -647,7 +678,7 @@ Always display results in a clean, readable format.
   db.close();
 
   // ── Done ──
-  console.log('\n🎉 Done. Restart Claude Code. That\'s it.\n');
+  console.log('\n🎉 Done. Restart Claude Code or reopen Codex. That\'s it.\n');
   console.log('nan-forget will automatically:');
   console.log('  • Load context from past sessions on startup');
   console.log('  • Save decisions, preferences, and facts as you work');

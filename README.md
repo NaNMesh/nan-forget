@@ -12,7 +12,7 @@ Your AI forgets everything when the session ends. NaN Forget fixes that.
 npx nan-forget setup
 ```
 
-That's it. The wizard installs Ollama, embeddings, hooks, and MCP config. Restart Claude Code. Your AI now remembers.
+That's it. The wizard installs Ollama, embeddings, Claude hooks, MCP config, and a project `AGENTS.md` for Codex-style agents. Restart Claude Code or reopen Codex. Your AI now remembers.
 
 No API keys needed. No Docker needed. Runs locally. Free forever.
 
@@ -22,17 +22,17 @@ No API keys needed. No Docker needed. Runs locally. Free forever.
 
 ```mermaid
 flowchart LR
-    A["You talk to Claude"] --> B["Claude learns things"]
-    B --> C["nan-forget saves to DB"]
+    A["You talk to your AI tool"] --> B["It learns things"]
+    B --> C["nan-forget saves to SQLite"]
     C --> D["Session ends"]
     D --> E["New session starts"]
     E --> F["nan-forget loads context"]
-    F --> G["Claude remembers everything"]
+    F --> G["Your AI remembers"]
 ```
 
-1. **You work normally.** Claude saves decisions, preferences, and facts to a vector database as you go. You don't do anything.
-2. **Session ends.** Memories persist in Qdrant. Aging memories get automatically compacted into long-term entries.
-3. **New session starts.** Claude loads context from past sessions. Auth decisions from 3 months ago on Project A surface when you work on Project B today.
+1. **You work normally.** Your agent saves decisions, preferences, and facts to a local SQLite memory database as you go.
+2. **Session ends.** Memories persist in `~/.nan-forget/memories.db`. Aging memories get automatically compacted into long-term entries.
+3. **New session starts.** nan-forget loads context from past sessions. Auth decisions from 3 months ago on Project A surface when you work on Project B today.
 
 ---
 
@@ -58,21 +58,21 @@ Four layers of protection ensure nothing is lost:
 3. **Hook catches .md writes** (PostToolUse intercept)
 4. **End-of-session sweep** (SessionEnd transcript scan)
 
-### Other LLMs (Codex, Cursor, etc.)
+### Codex, Cursor, and other tools
 
-Other LLMs don't have MCP or hooks. Instead:
+Codex and similar agents work well with nan-forget, but they usually need instruction files or shell/API fallbacks instead of Claude's hook model:
 
-1. **Get the system prompt**: `nan-forget prompt` or `GET /memories/instructions`
-2. **Paste it into your LLM's system prompt**. It tells the LLM to call the REST API for save/search/sync.
-3. **The LLM calls the REST API** at `localhost:3456` during conversation.
+1. **Run setup**: `npx nan-forget setup`
+2. **Use the generated `AGENTS.md`** in your repo. It tells Codex-style agents to `sync`, `search`, `save`, and `checkpoint` automatically.
+3. **Use REST or CLI fallback** during conversation. Agents can call the REST API on `localhost:3456` or local commands like `nan-forget sync`, `nan-forget search`, `nan-forget add`, and `nan-forget checkpoint`.
 
-The REST API mirrors the MCP tools. Same database, same retrieval pipeline, same consolidation. Memories saved by Claude are searchable from Codex and vice versa.
+The REST API and CLI now mirror the important memory workflows closely enough that memories saved by Claude are searchable from Codex and vice versa.
 
 ```bash
 # Start the REST API
 nan-forget api
 
-# The system prompt tells your LLM exactly what endpoints to call
+# The system prompt tells your agent exactly what endpoints to call
 nan-forget prompt
 ```
 
@@ -95,21 +95,24 @@ Type these in Claude Code:
 
 ## Works with Any LLM
 
-Claude uses MCP. Other LLMs use the REST API:
+Claude uses MCP. Codex can use `AGENTS.md` plus CLI/REST fallback:
 
 ```bash
 # Start the API
 nan-forget api
 
-# Get the system prompt for your LLM
+# Get the system prompt for your agent
 nan-forget prompt
 ```
 
-Paste the system prompt into Codex, Cursor, or any LLM. They share the same memory database.
+Codex, Cursor, and Claude all share the same memory database.
 
 ```bash
 curl http://localhost:3456/memories/search?q=auth
 curl -X POST http://localhost:3456/memories/sync -d '{"project":"my-app"}'
+curl -X POST http://localhost:3456/memories/checkpoint \
+  -H 'content-type: application/json' \
+  -d '{"task_summary":"Fixed auth regression","problem":"Expired tokens were not refreshed","solution":"Added refresh handling in middleware","files":["src/auth.ts"],"concepts":["auth","jwt"],"project":"my-app"}'
 ```
 
 ---
@@ -184,7 +187,7 @@ flowchart LR
 |-------|-------------|------|
 | **Recognition** (blur) | Prefetch 50 candidates, return top 5 summaries. Cheap. | 1 vector search |
 | **Recall** (clarity) | Fetch full content. Expand search cross-project (no project filter). | N point lookups |
-| **Association** | Qdrant `recommend()` API. Spreading activation from positive IDs. | 1 recommend call |
+| **Association** | Centroid-based related-memory search over `sqlite-vec`. Spreading activation from positive IDs. | 1 vector search |
 
 **Scoring formula:**
 
@@ -260,8 +263,9 @@ After completing a task, call `memory_checkpoint` with `task_summary`, `problem`
 Shares the same SQLite database as the MCP server — memories saved by Claude are searchable from Codex and vice versa.
 
 ```
-POST   /memories              — Save a memory
-POST   /memories/sync         — All-in-one context loader
+POST   /memories              — Save a memory (supports problem/solution/files/concepts)
+POST   /memories/checkpoint   — Save completed-task context
+POST   /memories/sync         — Lightweight session handshake
 GET    /memories/search?q=... — Semantic search
 GET    /memories/:id          — Get by ID
 PATCH  /memories/:id          — Update
@@ -373,8 +377,8 @@ src/
   memory-md.ts      MEMORY.md manager
   types.ts          Shared types (Memory, MemoryType, etc.)
   mcp/server.ts     MCP server, 13 tools
-  api/server.ts     REST API server, 10 endpoints
-  cli/index.ts      CLI with 14 commands
+  api/server.ts     REST API server
+  cli/index.ts      CLI commands + hook helpers
   setup/index.ts    Setup wizard (Ollama, hooks, MCP config)
 
 .claude/

@@ -3,8 +3,10 @@
  * NaN Forget CLI
  *
  * Usage:
- *   nan-forget add "text" [--type TYPE] [--project PROJECT] [--tags t1,t2]
+ *   nan-forget add "text" [--type TYPE] [--project PROJECT] [--tags t1,t2] [--problem TEXT] [--solution TEXT] [--files f1,f2] [--concepts c1,c2]
  *   nan-forget search "query" [--project PROJECT] [--type TYPE] [--depth 1|2|3]
+ *   nan-forget sync
+ *   nan-forget checkpoint --summary TEXT --problem TEXT --solution TEXT --files f1,f2 --concepts c1,c2 [--project PROJECT] [--tags t1,t2]
  *   nan-forget get <id>
  *   nan-forget list [--project PROJECT] [--type TYPE] [--status STATUS]
  *   nan-forget update <id> [--content "text"] [--type TYPE] [--tags t1,t2]
@@ -21,7 +23,7 @@
 import { parseArgs } from 'node:util';
 import { createDb, ensureSchema, getMemory, updateMemory, scrollMemories, deleteCollection } from '../sqlite.js';
 import { createEmbedder } from '../embeddings.js';
-import { writeMemory } from '../writer.js';
+import { buildCheckpointContent, writeMemory } from '../writer.js';
 import { retrieve } from '../retriever.js';
 import { clean } from '../cleaner.js';
 import { consolidate } from '../consolidator.js';
@@ -33,6 +35,8 @@ import type { MemoryType, MemoryStatus, EmbeddingProvider } from '../types.js';
 import type Database from 'better-sqlite3';
 let _testDb: Database.Database | null = null;
 export function setTestDb(db: Database.Database | null) { _testDb = db; }
+let _testEmbedder: ReturnType<typeof createEmbedder> | null = null;
+export function setTestEmbedder(embedder: ReturnType<typeof createEmbedder> | null) { _testEmbedder = embedder; }
 
 // --- Config ---
 
@@ -52,12 +56,19 @@ function getConfig() {
 function getClient() {
   const cfg = getConfig();
   const client = _testDb ?? createDb();
-  ensureSchema(client, cfg.embeddingProvider);
+  const embedder = _testEmbedder ?? createEmbedder({ provider: cfg.embeddingProvider, openaiApiKey: cfg.openaiApiKey });
+  ensureSchema(client, embedder.provider);
   return {
     client,
-    embedder: createEmbedder({ provider: cfg.embeddingProvider, openaiApiKey: cfg.openaiApiKey }),
+    embedder,
     ...cfg,
   };
+}
+
+function parseCsvList(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  const items = value.split(',').map((item) => item.trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
 }
 
 // --- Commands ---
@@ -69,6 +80,10 @@ export async function cmdAdd(args: string[]): Promise<string> {
       type: { type: 'string', short: 't', default: 'fact' },
       project: { type: 'string', short: 'p', default: '_global' },
       tags: { type: 'string', default: '' },
+      problem: { type: 'string' },
+      solution: { type: 'string' },
+      files: { type: 'string' },
+      concepts: { type: 'string' },
     },
     allowPositionals: true,
   });
@@ -83,8 +98,12 @@ export async function cmdAdd(args: string[]): Promise<string> {
     content,
     type: values.type as MemoryType,
     project: values.project!,
-    tags: values.tags ? values.tags.split(',').map((t) => t.trim()) : [],
+    tags: parseCsvList(values.tags) ?? [],
     user_id: userId,
+    problem: values.problem,
+    solution: values.solution,
+    files: parseCsvList(values.files),
+    concepts: parseCsvList(values.concepts),
   });
 
   if (result.deduplicated) {
@@ -139,6 +158,49 @@ export async function cmdSearch(args: string[]): Promise<string> {
   }
 
   return lines.length > 0 ? lines.join('\n') : 'No memories found.';
+}
+
+export async function cmdSync(_args: string[]): Promise<string> {
+  const { client, userId } = getClient();
+  const active = await scrollMemories(client, { user_id: userId, status: 'active' }, 1000);
+  const archived = await scrollMemories(client, { user_id: userId, status: 'archived' }, 1000);
+
+  const byProject: Record<string, number> = {};
+  for (const m of active) {
+    byProject[m.project] = (byProject[m.project] ?? 0) + 1;
+  }
+
+  const sorted = [...active].sort((a, b) =>
+    new Date(b.last_accessed ?? b.created_at).getTime() -
+    new Date(a.last_accessed ?? a.created_at).getTime()
+  );
+  const recent = sorted.slice(0, 10);
+
+  const lines = [
+    'NaN Forget — Ready',
+    '',
+    'Services',
+    'SQLite: ✓',
+    '',
+    'Memory Bank',
+    `${active.length} active memories | ${archived.length} archived`,
+    `${Object.keys(byProject).length} tracked project(s)`,
+  ];
+
+  if (Object.keys(byProject).length > 0) {
+    lines.push('Projects: ' + Object.entries(byProject).map(([project, count]) => `${project} (${count})`).join(', '));
+  }
+
+  if (recent.length > 0) {
+    lines.push('', 'Recent Context');
+    for (const m of recent) {
+      lines.push(`- [${m.type}] ${m.project}: ${m.summary}`);
+    }
+  }
+
+  lines.push('', 'Ready', 'Use `nan-forget search "<topic>"` to recall details and `nan-forget add` to save new context.');
+
+  return lines.join('\n');
 }
 
 export async function cmdGet(args: string[]): Promise<string> {
@@ -207,6 +269,54 @@ export async function cmdUpdate(args: string[]): Promise<string> {
 
   await updateMemory(client, id, updates);
   return `✓ Memory updated: ${id}`;
+}
+
+export async function cmdCheckpoint(args: string[]): Promise<string> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      summary: { type: 'string' },
+      problem: { type: 'string' },
+      solution: { type: 'string' },
+      files: { type: 'string', default: '' },
+      concepts: { type: 'string', default: '' },
+      project: { type: 'string', short: 'p', default: '_global' },
+      tags: { type: 'string', default: '' },
+    },
+    allowPositionals: true,
+  });
+
+  if (!values.summary || !values.problem || !values.solution) {
+    return 'Error: Required: --summary, --problem, --solution. Usage: nan-forget checkpoint --summary "..." --problem "..." --solution "..." --files file1,file2 --concepts c1,c2';
+  }
+
+  const files = parseCsvList(values.files) ?? [];
+  const concepts = parseCsvList(values.concepts) ?? [];
+
+  if (concepts.length === 0) {
+    return 'Error: --concepts is required for checkpoint memories.';
+  }
+
+  const { client, embedder, userId } = getClient();
+  ensureSchema(client, embedder.provider);
+
+  const result = await writeMemory(client, embedder, {
+    content: buildCheckpointContent(values.summary, values.problem, values.solution, files),
+    type: 'fact',
+    project: values.project!,
+    tags: ['checkpoint', 'task-completion', ...(parseCsvList(values.tags) ?? [])],
+    user_id: userId,
+    problem: values.problem,
+    solution: values.solution,
+    files,
+    concepts,
+  });
+
+  if (result.deduplicated) {
+    return `✓ Checkpoint merged with existing memory: ${result.id}`;
+  }
+
+  return `✓ Checkpoint saved: ${result.id}`;
 }
 
 export async function cmdArchive(args: string[]): Promise<string> {
@@ -415,6 +525,8 @@ export async function cmdExport(_args: string[]): Promise<string> {
 const COMMANDS: Record<string, (args: string[]) => Promise<string>> = {
   add: cmdAdd,
   search: cmdSearch,
+  sync: cmdSync,
+  checkpoint: cmdCheckpoint,
   get: cmdGet,
   list: cmdList,
   update: cmdUpdate,
@@ -435,8 +547,10 @@ Usage: nan-forget <command> [options]
 
 Commands:
   setup              One-command setup (Ollama, hooks, MCP)
-  add "text"         Save a memory
+  add "text"         Save a memory (supports structured fields)
   search "query"     Search memories
+  sync               Lightweight memory handshake for agents
+  checkpoint         Save a completed-task memory with problem/solution context
   get <id>           Get memory by ID
   list               List memories
   update <id>        Update a memory
@@ -455,6 +569,11 @@ Options (vary by command):
   -t, --type         fact|decision|preference|task|context
   -p, --project      Project name
   --tags             Comma-separated tags
+  --problem          Problem or challenge being captured
+  --solution         Solution or resolution details
+  --files            Comma-separated file paths
+  --concepts         Comma-separated searchable concepts
+  --summary          One-line task summary for checkpoint
   -d, --depth        Search depth 1-3
   -n, --limit        Max results
 

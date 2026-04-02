@@ -2,6 +2,7 @@
 
 > **Never forget. Long-term memory for AI coding tools.**
 > NaN = Not a Forget. Built by NaN Logic LLC.
+> Note: this spec predates the SQLite migration and newer Codex/CLI parity work. Use `README.md` and the current `src/` code as the source of truth for the shipped product.
 
 ## Status
 v1 — not started. This file is the full handoff context for any new session.
