@@ -595,15 +595,21 @@ export async function setup(): Promise<void> {
   console.log('  ✓ CLAUDE.md created');
   console.log('  ✓ AGENTS.md created');
 
-  // ── Step 7: Install global slash command ──
+  // ── Step 7: Install global slash commands ──
   const globalCommandsDir = join(homedir(), '.claude', 'commands');
   await mkdir(globalCommandsDir, { recursive: true });
-  const slashCommandSrc = join(resolve(__dirname, '..', '..'), '.claude', 'commands', 'nan-forget.md');
-  const slashCommandDest = join(globalCommandsDir, 'nan-forget.md');
-  try {
-    await copyFile(slashCommandSrc, slashCommandDest);
-    console.log('  ✓ /nan-forget slash command installed globally');
-  } catch {
+  const commandsSrcDir = join(resolve(__dirname, '..', '..'), '.claude', 'commands');
+  const commandFiles = ['nan-forget.md', 'nan-forget:clean.md', 'nan-forget:compact.md', 'nan-forget:stats.md'];
+  let copiedCommands = false;
+  for (const cmdFile of commandFiles) {
+    try {
+      await copyFile(join(commandsSrcDir, cmdFile), join(globalCommandsDir, cmdFile));
+      copiedCommands = true;
+    } catch { /* source doesn't exist for this file */ }
+  }
+  if (copiedCommands) {
+    console.log('  ✓ /nan-forget slash commands installed globally');
+  } else {
     // Source doesn't exist (npm install), write inline
     const slashContent = `# nan-forget — Memory Management
 
@@ -660,8 +666,11 @@ For any unrecognized subcommand, show the usage list above.
 
 Always display results in a clean, readable format.
 `;
-    await writeFile(slashCommandDest, slashContent, 'utf-8');
-    console.log('  ✓ /nan-forget slash command installed globally');
+    await writeFile(join(globalCommandsDir, 'nan-forget.md'), slashContent, 'utf-8');
+    await writeFile(join(globalCommandsDir, 'nan-forget:clean.md'), '# nan-forget:clean — Garbage Collection\n\nTry `memory_clean` MCP tool first. If unavailable, run `npx nan-forget clean` via Bash.\n', 'utf-8');
+    await writeFile(join(globalCommandsDir, 'nan-forget:compact.md'), '# nan-forget:compact — Consolidate Memories\n\nTry `memory_consolidate` MCP tool first. If unavailable, run `npx nan-forget consolidate` via Bash.\n', 'utf-8');
+    await writeFile(join(globalCommandsDir, 'nan-forget:stats.md'), '# nan-forget:stats — Memory Health\n\nTry `memory_stats` MCP tool first. If unavailable, run `npx nan-forget stats` via Bash.\n', 'utf-8');
+    console.log('  ✓ /nan-forget slash commands installed globally');
   }
 
   // ── Step 8: Start REST API for non-MCP LLMs ──

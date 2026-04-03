@@ -5,13 +5,9 @@ Manual control for your AI long-term memory. Run without arguments to sync conte
 ## Usage
 
 - `/nan-forget` — Save session context to long-term memory + show stats
-- `/nan-forget setup` — Run full setup (Qdrant, Ollama, hooks, MCP)
-- `/nan-forget clean` — Run garbage collection on stale memories
-- `/nan-forget stats` — Show memory health (active, archived, by type/project)
-- `/nan-forget compact` — Force consolidation of aging memories
-- `/nan-forget health` — Check if Qdrant, Ollama, and REST API are running
-- `/nan-forget start` — Start all services
-- `/nan-forget search <query>` — Search memories
+- `/nan-forget:clean` — Run garbage collection on stale memories
+- `/nan-forget:stats` — Show memory health (active, archived, by type/project)
+- `/nan-forget:compact` — Force consolidation of aging memories
 
 ## Instructions
 
@@ -33,22 +29,10 @@ Parse the subcommand from `$ARGUMENTS`. Try the MCP tool first, fall back to CLI
 
    After saving, tell the user how many memories were saved and list them briefly. Then show this tip:
 
-   > Tip: Use `/nan-forget compact` to consolidate related memories, or `/nan-forget clean` to remove stale ones.
+   > Tip: Use `/nan-forget:compact` to consolidate related memories, or `/nan-forget:clean` to remove stale ones.
 
    If there's nothing worth saving (e.g., trivial conversation), say so — don't save junk.
 
-**Subcommands:**
-
-- `setup` → run `npx nan-forget setup` via Bash (interactive — let user respond to prompts)
-- `clean` → try `memory_clean` tool, else run `npx nan-forget clean` via Bash
-- `stats` → try `memory_stats` tool, else run `npx nan-forget stats` via Bash
-- `compact` → try `memory_consolidate` tool, else run `npx nan-forget consolidate` via Bash
-- `health` → try `memory_health` tool, else run `npx nan-forget health` via Bash
-- `start` → try `memory_start` tool, else run `npx nan-forget start` via Bash
-- `search <query>` → try `memory_search` tool, else run `npx nan-forget search "<query>"` via Bash
-
-**Important:** If MCP tools (`memory_*`) are not available, always fall back to CLI commands. Never tell the user the command is broken — just use the CLI.
-
-For any unrecognized subcommand, show the usage list above.
+**Important:** If MCP tools (`memory_*`) are not available, always fall back to CLI commands (`npx nan-forget stats`, etc.). Never tell the user the command is broken — just use the CLI.
 
 Always display results in a clean, readable format.
