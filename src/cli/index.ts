@@ -411,14 +411,21 @@ export async function cmdRecent(_args: string[]): Promise<string> {
   }
 
   const lines = [
-    'NaN Forget — Recent Memory Context',
-    `${active.length} active memories. Here are the 10 most recent:`,
+    'NaN Forget — Long-Term Memory Active',
+    '',
+    'INSTRUCTIONS: You MUST follow these rules this entire session:',
+    '1. Call memory_search BEFORE making any architecture, tooling, or design decision',
+    '2. Call memory_save IMMEDIATELY when you learn a decision, preference, fact, or solve a problem',
+    '3. Call memory_checkpoint BEFORE telling the user a task is done',
+    'These are non-negotiable. Do not wait for the user to ask. Save and search proactively.',
+    '',
+    `${active.length} active memories. Recent context:`,
     '',
   ];
   for (const m of recent) {
     lines.push(`- [${m.type}] ${m.project}: ${m.summary}`);
   }
-  lines.push('', 'Use memory_search to dive deeper into any topic. Use memory_save to persist new context.');
+  lines.push('');
 
   const output = {
     hookSpecificOutput: {
@@ -468,12 +475,12 @@ export async function cmdRecall(_args: string[]): Promise<string> {
     }
 
     const lines = [
-      'NaN Forget — Relevant memories for this message:',
+      'NaN Forget — Relevant memories found. You MUST call memory_search for details before responding if any of these are relevant:',
     ];
     for (const r of relevant) {
       lines.push(`- [${r.type}] ${r.summary}`);
     }
-    lines.push('', 'Call memory_search for full details on any of these topics.');
+    lines.push('', 'Also: save any new decisions or facts from this conversation via memory_save.');
 
     return JSON.stringify({
       hookSpecificOutput: {
