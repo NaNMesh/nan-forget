@@ -407,7 +407,7 @@ process.stdin.on('end', () => {
       hooks.SessionStart = [{
         hooks: [{
           type: 'command',
-          command: 'nan-forget recent',
+          command: 'npx nan-forget recent',
           timeout: 10,
         }],
       }];
@@ -416,7 +416,7 @@ process.stdin.on('end', () => {
       hooks.UserPromptSubmit = [{
         hooks: [{
           type: 'command',
-          command: 'nan-forget recall',
+          command: 'npx nan-forget recall',
           timeout: 10,
         }],
       }];
