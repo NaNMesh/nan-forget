@@ -298,11 +298,13 @@ process.stdin.on('end', () => {
 import { readFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 const PATTERNS = [
-  { pattern: /\\b(decided|chose|switched to|went with|using .+ instead of)\\b/i, type: 'decision' },
-  { pattern: /\\b(prefer|always use|never use|convention is)\\b/i, type: 'preference' },
-  { pattern: /\\b(tech stack|framework|database|deploy|hosting|endpoint)\\b/i, type: 'fact' },
-  { pattern: /\\b(TODO|need to|should|must|next step|blocked)\\b/i, type: 'task' },
-  { pattern: /\\b(working on|currently|in progress|building|implementing)\\b/i, type: 'context' },
+  { pattern: /\\b(decided|chose|switched to|went with|using .+ instead of|picked|selected|opted for|replaced .+ with)\\b/i, type: 'decision' },
+  { pattern: /\\b(prefer|always use|never use|convention is|style is|we follow|our approach)\\b/i, type: 'preference' },
+  { pattern: /\\b(tech stack|framework|database|deploy|hosting|endpoint|configured|installed|set up|created .+ (file|table|index|schema|route|component))\\b/i, type: 'fact' },
+  { pattern: /\\b(fixed|bug|root cause|the (issue|problem|error) was|resolved|patched|workaround)\\b/i, type: 'fact' },
+  { pattern: /\\b(TODO|need to|should|must|next step|blocked|remaining|still need)\\b/i, type: 'task' },
+  { pattern: /\\b(working on|currently|in progress|building|implementing|migrating|refactoring)\\b/i, type: 'context' },
+  { pattern: /\\b(architecture|pattern|design|structure|schema|pipeline|workflow|approach)\\b/i, type: 'fact' },
 ];
 let input = '';
 process.stdin.setEncoding('utf-8');
@@ -314,19 +316,19 @@ process.stdin.on('end', () => {
     if (!tp) process.exit(0);
     let lines;
     try { lines = readFileSync(tp, 'utf-8').split('\\n').filter(Boolean).map(l => JSON.parse(l)); } catch { process.exit(0); }
-    const msgs = lines.filter(l => l.role === 'assistant' && typeof l.content === 'string').slice(-20);
+    const msgs = lines.filter(l => l.role === 'assistant' && typeof l.content === 'string');
     const project = (data?.cwd ?? '').split('/').pop() || '_global';
     const toSave = []; const seen = new Set();
     for (const msg of msgs) {
-      const sentences = (msg.content || '').split(/[.!?\\n]/).filter(s => s.trim().length > 15 && s.trim().length < 500);
+      const sentences = (msg.content || '').split(/[.!?\\n]/).filter(s => s.trim().length > 20 && s.trim().length < 500);
       for (const s of sentences) {
         const t = s.trim();
         for (const { pattern, type } of PATTERNS) {
-          if (pattern.test(t) && !seen.has(t.slice(0, 50))) { seen.add(t.slice(0, 50)); toSave.push({ content: t, type }); break; }
+          if (pattern.test(t) && !seen.has(t.slice(0, 60))) { seen.add(t.slice(0, 60)); toSave.push({ content: t, type }); break; }
         }
       }
     }
-    for (const item of toSave.slice(-5)) {
+    for (const item of toSave.slice(-15)) {
       try { execFileSync('npx', ['nan-forget', 'add', item.content, '--type', item.type, '--project', project, '--tags', 'auto-save,session-end'], { timeout: 10000, stdio: 'ignore' }); } catch {}
     }
   } catch {}
@@ -353,7 +355,7 @@ process.stdin.on('end', () => {
         hooks: [{
           type: 'command',
           command: `node "$CLAUDE_PROJECT_DIR"/.claude/hooks/session-end.js`,
-          timeout: 30,
+          timeout: 60,
         }],
       }],
     },
