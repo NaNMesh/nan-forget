@@ -171,13 +171,19 @@ interface McpConfig {
 }
 
 async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<string> {
+  // Prefer direct binary (faster startup) over npx (has overhead)
+  const { ok: hasBinary } = run('which nan-forget');
+  const mcpCommand = hasBinary ? 'nan-forget' : 'npx';
+  const mcpArgs = hasBinary ? ['serve'] : ['nan-forget', 'serve'];
+
   // Register MCP server via `claude mcp add` (works for Claude Code)
   const { ok: hasClaude } = run('which claude');
 
   if (hasClaude) {
     // Remove old entry first (ignore errors if not exists)
+    run('claude mcp remove nan-forget -s user 2>/dev/null');
     run('claude mcp remove nan-forget 2>/dev/null');
-    const { ok } = run('claude mcp add nan-forget -s user -- npx nan-forget serve');
+    const { ok } = run(`claude mcp add nan-forget -s user -- ${mcpCommand} ${mcpArgs.join(' ')}`);
     if (ok) {
       return 'Claude Code MCP (via claude mcp add)';
     }
@@ -196,8 +202,8 @@ async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<st
     if (!config.mcpServers) config.mcpServers = {};
     (config.mcpServers as Record<string, unknown>)['nan-forget'] = {
       type: 'stdio',
-      command: 'npx',
-      args: ['nan-forget', 'serve'],
+      command: mcpCommand,
+      args: mcpArgs,
       env: {},
     };
 
@@ -215,8 +221,8 @@ async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<st
     } catch { /* new file */ }
 
     desktopConfig.mcpServers['nan-forget'] = {
-      command: 'npx',
-      args: ['nan-forget', 'serve'],
+      command: mcpCommand,
+      args: mcpArgs,
       env: {},
     };
     await writeFile(desktopConfigPath, JSON.stringify(desktopConfig, null, 2), 'utf-8');
