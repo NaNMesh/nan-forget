@@ -80,8 +80,10 @@ export function createServer(deps?: ServerDeps): { server: McpServer; client: Da
       solution: z.string().optional().describe('How was it solved? What was the answer or approach?'),
       files: z.array(z.string()).optional().describe('Files involved (e.g. ["src/auth.ts", "config.yaml"])'),
       concepts: z.array(z.string()).optional().describe('Key concepts for searchability (e.g. ["auth", "jwt", "middleware"])'),
+      provenance: z.enum(['save', 'checkpoint', 'debate', 'human']).optional().describe('How this memory was created. "debate" and "human" auto-promote to core tier. Default "save".'),
+      confidence: z.number().min(0).max(1).optional().describe('Trust level 0.0–1.0. Auto-set from provenance if omitted (save=0.5, checkpoint=0.65, debate=0.85, human=0.95).'),
     },
-    async ({ content, type, project, tags, problem, solution, files, concepts }) => {
+    async ({ content, type, project, tags, problem, solution, files, concepts, provenance, confidence }) => {
       ensureSchema(client, embedder.provider);
 
       const result = await writeMemory(client, embedder, {
@@ -94,6 +96,8 @@ export function createServer(deps?: ServerDeps): { server: McpServer; client: Da
         solution,
         files,
         concepts,
+        provenance: provenance as any,
+        confidence,
       });
 
       // Also add to MEMORY.md
@@ -160,14 +164,16 @@ export function createServer(deps?: ServerDeps): { server: McpServer; client: Da
       if (result.recognition.length > 0 && maxStage === 1) {
         parts.push('## Recognition (blur)\n');
         for (const r of result.recognition) {
-          parts.push(`- [${r.type}] ${r.summary} (score: ${r.adjusted_score.toFixed(3)}, id: ${r.id})`);
+          const tierLabel = r.tier === 'core' ? ' [CORE]' : '';
+          parts.push(`- [${r.type}]${tierLabel} ${r.summary} (score: ${r.adjusted_score.toFixed(3)}, id: ${r.id})`);
         }
       }
 
       if (result.recall.length > 0) {
         parts.push('## Memories\n');
         for (const r of result.recall) {
-          parts.push(`### ${r.memory.summary} (${r.memory.type})`);
+          const tierLabel = r.memory.tier === 'core' ? ' [CORE]' : '';
+          parts.push(`### ${r.memory.summary} (${r.memory.type})${tierLabel}`);
           parts.push(`> ${r.memory.content}`);
           if (r.memory.problem) parts.push(`**Problem:** ${r.memory.problem}`);
           if (r.memory.solution) parts.push(`**Solution:** ${r.memory.solution}`);
@@ -553,6 +559,7 @@ export function createServer(deps?: ServerDeps): { server: McpServer; client: Da
         solution,
         files,
         concepts,
+        provenance: 'checkpoint',
       });
 
       // Add to MEMORY.md
