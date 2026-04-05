@@ -59,6 +59,24 @@ function run(cmd: string): { ok: boolean; output: string } {
   }
 }
 
+/** Resolve absolute path for a binary, with common fallback locations. */
+function resolveAbsolutePath(bin: string): string {
+  // Try `which` first (works when setup runs from a proper shell)
+  const { ok, output } = run(`which ${bin}`);
+  if (ok && output.startsWith('/')) return output;
+  // Common locations on macOS (Homebrew) and Linux
+  const candidates = [
+    `/opt/homebrew/bin/${bin}`,
+    `/usr/local/bin/${bin}`,
+    `/usr/bin/${bin}`,
+  ];
+  for (const c of candidates) {
+    const { ok: exists } = run(`test -f ${c}`);
+    if (exists) return c;
+  }
+  return bin; // fallback to bare name (best effort)
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -171,19 +189,23 @@ interface McpConfig {
 }
 
 async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<string> {
+  // Resolve absolute paths — Claude spawns MCP servers via /bin/sh which has minimal PATH
+  const nanForgetBin = resolveAbsolutePath('nan-forget');
+  const npxBin = resolveAbsolutePath('npx');
   // Prefer direct binary (faster startup) over npx (has overhead)
-  const { ok: hasBinary } = run('which nan-forget');
-  const mcpCommand = hasBinary ? 'nan-forget' : 'npx';
+  const hasBinary = nanForgetBin !== 'nan-forget';
+  const mcpCommand = hasBinary ? nanForgetBin : npxBin;
   const mcpArgs = hasBinary ? ['serve'] : ['nan-forget', 'serve'];
 
   // Register MCP server via `claude mcp add` (works for Claude Code)
-  const { ok: hasClaude } = run('which claude');
+  const claudeBin = resolveAbsolutePath('claude');
+  const hasClaude = claudeBin !== 'claude';
 
   if (hasClaude) {
     // Remove old entry first (ignore errors if not exists)
-    run('claude mcp remove nan-forget -s user 2>/dev/null');
-    run('claude mcp remove nan-forget 2>/dev/null');
-    const { ok } = run(`claude mcp add nan-forget -s user -- ${mcpCommand} ${mcpArgs.join(' ')}`);
+    run(`${claudeBin} mcp remove nan-forget -s user 2>/dev/null`);
+    run(`${claudeBin} mcp remove nan-forget 2>/dev/null`);
+    const { ok } = run(`${claudeBin} mcp add nan-forget -s user -- ${mcpCommand} ${mcpArgs.join(' ')}`);
     if (ok) {
       return 'Claude Code MCP (via claude mcp add)';
     }
@@ -260,6 +282,8 @@ async function installHooksAndClaudeMd(): Promise<void> {
   const projectDir = process.cwd();
   const claudeDir = join(projectDir, '.claude');
   const hooksDir = join(claudeDir, 'hooks');
+  const npxBin = resolveAbsolutePath('npx');
+  const nodeBin = resolveAbsolutePath('node');
 
   await mkdir(hooksDir, { recursive: true });
 
@@ -290,7 +314,7 @@ process.stdin.on('end', () => {
     let project = '_global';
     const projectMatch = filePath.match(/\\/projects\\/([^/]+)\\//);
     if (projectMatch) { const s = projectMatch[1].split('-'); project = s[s.length - 1] || '_global'; }
-    execFile('npx', ['nan-forget', 'add', body.slice(0, 2000), '--type', nfType, '--project', project, '--tags', 'auto-sync,claude-memory'], { timeout: 15000 }, () => {});
+    execFile('${npxBin}', ['nan-forget', 'add', body.slice(0, 2000), '--type', nfType, '--project', project, '--tags', 'auto-sync,claude-memory'], { timeout: 15000 }, () => {});
   } catch {}
   process.exit(0);
 });
@@ -335,7 +359,7 @@ process.stdin.on('end', () => {
       }
     }
     for (const item of toSave.slice(-15)) {
-      try { execFileSync('npx', ['nan-forget', 'add', item.content, '--type', item.type, '--project', project, '--tags', 'auto-save,session-end'], { timeout: 10000, stdio: 'ignore' }); } catch {}
+      try { execFileSync('${npxBin}', ['nan-forget', 'add', item.content, '--type', item.type, '--project', project, '--tags', 'auto-save,session-end'], { timeout: 10000, stdio: 'ignore' }); } catch {}
     }
   } catch {}
   process.exit(0);
@@ -353,14 +377,14 @@ process.stdin.on('end', () => {
         matcher: 'Write|Edit',
         hooks: [{
           type: 'command',
-          command: `node "$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-sync.js`,
+          command: `${nodeBin} "$CLAUDE_PROJECT_DIR"/.claude/hooks/memory-sync.js`,
           timeout: 10,
         }],
       }],
       SessionEnd: [{
         hooks: [{
           type: 'command',
-          command: `node "$CLAUDE_PROJECT_DIR"/.claude/hooks/session-end.js`,
+          command: `${nodeBin} "$CLAUDE_PROJECT_DIR"/.claude/hooks/session-end.js`,
           timeout: 60,
         }],
       }],
@@ -407,7 +431,7 @@ process.stdin.on('end', () => {
       hooks.SessionStart = [{
         hooks: [{
           type: 'command',
-          command: 'npx nan-forget recent',
+          command: `${npxBin} nan-forget recent`,
           timeout: 10,
         }],
       }];
@@ -416,7 +440,7 @@ process.stdin.on('end', () => {
       hooks.UserPromptSubmit = [{
         hooks: [{
           type: 'command',
-          command: 'npx nan-forget recall',
+          command: `${npxBin} nan-forget recall`,
           timeout: 10,
         }],
       }];
@@ -503,6 +527,7 @@ Use structured fields whenever possible so future searches can recover the full 
 
 export async function setup(): Promise<void> {
   const prompt = createPrompt();
+  const npxBin = resolveAbsolutePath('npx');
 
   console.log('\n🧠 NaN Forget — Setup\n');
   console.log('Checking dependencies...\n');
@@ -640,7 +665,7 @@ Parse the subcommand from \`$ARGUMENTS\`. Try the MCP tool first, fall back to C
 
 **Default (no arguments):** Do both steps:
 
-1. **Sync:** Call \`memory_sync\` MCP tool (or \`npx nan-forget stats\` as fallback). Show the status to the user.
+1. **Sync:** Call \`memory_sync\` MCP tool (or \`${npxBin} nan-forget stats\` as fallback). Show the status to the user.
 2. **Save session context:** Review the ENTIRE current conversation and extract every piece of context worth persisting across sessions. Look for:
    - Architecture or design decisions ("we chose X over Y because Z")
    - User preferences or workflow habits
@@ -660,13 +685,13 @@ Parse the subcommand from \`$ARGUMENTS\`. Try the MCP tool first, fall back to C
 
 **Subcommands:**
 
-- \`setup\` → run \`npx nan-forget setup\` via Bash (interactive — let user respond to prompts)
-- \`clean\` → try \`memory_clean\` tool, else run \`npx nan-forget clean\` via Bash
-- \`stats\` → try \`memory_stats\` tool, else run \`npx nan-forget stats\` via Bash
-- \`compact\` → try \`memory_consolidate\` tool, else run \`npx nan-forget consolidate\` via Bash
-- \`health\` → try \`memory_health\` tool, else run \`npx nan-forget health\` via Bash
-- \`start\` → try \`memory_start\` tool, else run \`npx nan-forget start\` via Bash
-- \`search <query>\` → try \`memory_search\` tool, else run \`npx nan-forget search "<query>"\` via Bash
+- \`setup\` → run \`${npxBin} nan-forget setup\` via Bash (interactive — let user respond to prompts)
+- \`clean\` → try \`memory_clean\` tool, else run \`${npxBin} nan-forget clean\` via Bash
+- \`stats\` → try \`memory_stats\` tool, else run \`${npxBin} nan-forget stats\` via Bash
+- \`compact\` → try \`memory_consolidate\` tool, else run \`${npxBin} nan-forget consolidate\` via Bash
+- \`health\` → try \`memory_health\` tool, else run \`${npxBin} nan-forget health\` via Bash
+- \`start\` → try \`memory_start\` tool, else run \`${npxBin} nan-forget start\` via Bash
+- \`search <query>\` → try \`memory_search\` tool, else run \`${npxBin} nan-forget search "<query>"\` via Bash
 
 **Important:** If MCP tools (\`memory_*\`) are not available, always fall back to CLI commands. Never tell the user the command is broken — just use the CLI.
 
@@ -675,16 +700,16 @@ For any unrecognized subcommand, show the usage list above.
 Always display results in a clean, readable format.
 `;
     await writeFile(join(globalCommandsDir, 'nan-forget.md'), slashContent, 'utf-8');
-    await writeFile(join(globalCommandsDir, 'nan-forget:clean.md'), '# nan-forget:clean — Garbage Collection\n\nTry `memory_clean` MCP tool first. If unavailable, run `npx nan-forget clean` via Bash.\n', 'utf-8');
-    await writeFile(join(globalCommandsDir, 'nan-forget:compact.md'), '# nan-forget:compact — Consolidate Memories\n\nTry `memory_consolidate` MCP tool first. If unavailable, run `npx nan-forget consolidate` via Bash.\n', 'utf-8');
-    await writeFile(join(globalCommandsDir, 'nan-forget:stats.md'), '# nan-forget:stats — Memory Health\n\nTry `memory_stats` MCP tool first. If unavailable, run `npx nan-forget stats` via Bash.\n', 'utf-8');
+    await writeFile(join(globalCommandsDir, 'nan-forget:clean.md'), `# nan-forget:clean — Garbage Collection\n\nTry \`memory_clean\` MCP tool first. If unavailable, run \`${npxBin} nan-forget clean\` via Bash.\n`, 'utf-8');
+    await writeFile(join(globalCommandsDir, 'nan-forget:compact.md'), `# nan-forget:compact — Consolidate Memories\n\nTry \`memory_consolidate\` MCP tool first. If unavailable, run \`${npxBin} nan-forget consolidate\` via Bash.\n`, 'utf-8');
+    await writeFile(join(globalCommandsDir, 'nan-forget:stats.md'), `# nan-forget:stats — Memory Health\n\nTry \`memory_stats\` MCP tool first. If unavailable, run \`${npxBin} nan-forget stats\` via Bash.\n`, 'utf-8');
     console.log('  ✓ /nan-forget slash commands installed globally');
   }
 
   // ── Step 8: Start REST API for non-MCP LLMs ──
   const startApi = await prompt.ask('\nStart REST API for Codex/Cursor? (y/n)', 'y');
   if (startApi.toLowerCase() === 'y') {
-    const { ok: apiOk } = run('npx nan-forget api &');
+    const { ok: apiOk } = run(`${npxBin} nan-forget api &`);
     if (apiOk) {
       console.log('  ✓ REST API running on http://localhost:3456');
       console.log('    Get system prompt: nan-forget prompt');
