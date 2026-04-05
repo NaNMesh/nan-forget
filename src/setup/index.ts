@@ -201,6 +201,26 @@ async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<st
   const claudeBin = resolveAbsolutePath('claude');
   const hasClaude = claudeBin !== 'claude';
 
+  // Always write Claude Desktop config for Mac app users
+  const claudeConfigDir = join(homedir(), '.claude');
+  const desktopConfigPath = join(claudeConfigDir, 'claude_desktop_config.json');
+  await mkdir(claudeConfigDir, { recursive: true });
+
+  let desktopConfig: McpConfig = { mcpServers: {} };
+  try {
+    await access(desktopConfigPath);
+    const raw = await readFile(desktopConfigPath, 'utf-8');
+    desktopConfig = JSON.parse(raw);
+    if (!desktopConfig.mcpServers) desktopConfig.mcpServers = {};
+  } catch { /* new file */ }
+
+  desktopConfig.mcpServers['nan-forget'] = {
+    command: mcpCommand,
+    args: mcpArgs,
+    env: {},
+  };
+  await writeFile(desktopConfigPath, JSON.stringify(desktopConfig, null, 2), 'utf-8');
+
   if (hasClaude) {
     // Remove old entry first (ignore errors if not exists)
     run(`${claudeBin} mcp remove nan-forget -s user 2>/dev/null`);
@@ -228,26 +248,6 @@ async function writeMcpConfig(_provider: string, _openaiKey: string): Promise<st
       args: mcpArgs,
       env: {},
     };
-
-    // Also write Claude Desktop config for GUI users
-    const claudeConfigDir = join(homedir(), '.claude');
-    const desktopConfigPath = join(claudeConfigDir, 'claude_desktop_config.json');
-    await mkdir(claudeConfigDir, { recursive: true });
-
-    let desktopConfig: McpConfig = { mcpServers: {} };
-    try {
-      await access(desktopConfigPath);
-      const raw = await readFile(desktopConfigPath, 'utf-8');
-      desktopConfig = JSON.parse(raw);
-      if (!desktopConfig.mcpServers) desktopConfig.mcpServers = {};
-    } catch { /* new file */ }
-
-    desktopConfig.mcpServers['nan-forget'] = {
-      command: mcpCommand,
-      args: mcpArgs,
-      env: {},
-    };
-    await writeFile(desktopConfigPath, JSON.stringify(desktopConfig, null, 2), 'utf-8');
 
     return claudeJsonPath;
   } catch {
