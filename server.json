@@ -6,12 +6,12 @@
     "url": "https://github.com/NaNMesh/nan-forget",
     "source": "github"
   },
-  "version": "0.6.0",
+  "version": "0.6.6",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "nan-forget",
-      "version": "0.6.0",
+      "version": "0.6.6",
       "transport": {
         "type": "stdio"
       },
