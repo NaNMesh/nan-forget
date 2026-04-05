@@ -82,7 +82,8 @@ export async function gcDecayed(
   }, config.scan_limit);
 
   for (const mem of results) {
-    const decay = decayWeight(mem.last_accessed);
+    // High-confidence memories decay slower — pass confidence to decayWeight
+    const decay = decayWeight(mem.last_accessed, mem.confidence ?? 0.5);
     if (decay < config.decay_threshold) {
       await updateMemory(client, mem.id, { status: 'archived' });
       archived.push(mem.id);
@@ -190,7 +191,7 @@ export async function syncMemoryMd(
   // Group by project, score, sort
   const byProject = new Map<string, (Memory & { adj_score: number })[]>();
   for (const mem of results) {
-    const adj = adjustedScore(1.0, mem.last_accessed, mem.access_count ?? 0);
+    const adj = adjustedScore(1.0, mem.last_accessed, mem.access_count ?? 0, mem.confidence ?? 0.5);
     const project = mem.project ?? '_global';
     const existing = byProject.get(project) ?? [];
     existing.push({ ...mem, adj_score: adj });

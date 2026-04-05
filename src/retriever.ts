@@ -23,6 +23,8 @@ export interface RecognitionResult {
   tags: string[];
   concepts: string[];
   project: string;
+  tier: Memory['tier'];
+  confidence: number;
   score: number;
   adjusted_score: number;
 }
@@ -51,21 +53,32 @@ export interface RetrievalResult {
 
 const HALF_LIFE_DAYS = 30;
 
-export function decayWeight(lastAccessed: string): number {
+export function decayWeight(lastAccessed: string, confidence = 0.5): number {
   const days = (Date.now() - new Date(lastAccessed).getTime()) / (1000 * 60 * 60 * 24);
-  return Math.pow(0.5, days / HALF_LIFE_DAYS);
+  // High-confidence memories decay much slower: decay^(1 - confidence)
+  // confidence 0.5 → normal decay, confidence 0.85 → 15% of normal rate
+  return Math.pow(Math.pow(0.5, days / HALF_LIFE_DAYS), 1 - confidence);
 }
 
 export function frequencyBoost(accessCount: number): number {
   return Math.log2(accessCount + 1) / 10 + 1;
 }
 
+/** Confidence boost: 0.5 confidence → 0.75x, 1.0 confidence → 1.0x */
+export function confidenceBoost(confidence: number): number {
+  return 0.5 + 0.5 * confidence;
+}
+
 export function adjustedScore(
   vectorScore: number,
   lastAccessed: string,
-  accessCount: number
+  accessCount: number,
+  confidence = 0.5
 ): number {
-  return vectorScore * decayWeight(lastAccessed) * frequencyBoost(accessCount);
+  return vectorScore
+    * decayWeight(lastAccessed, confidence)
+    * frequencyBoost(accessCount)
+    * confidenceBoost(confidence);
 }
 
 // --- Stage 1: Recognition (blur) ---
@@ -101,11 +114,14 @@ export async function recognize(
     tags: r.memory.tags ?? [],
     concepts: r.memory.concepts ?? [],
     project: r.memory.project ?? '_global',
+    tier: r.memory.tier ?? 'regular',
+    confidence: r.memory.confidence ?? 0.5,
     score: r.score,
     adjusted_score: adjustedScore(
       r.score,
       r.memory.last_accessed,
-      r.memory.access_count ?? 0
+      r.memory.access_count ?? 0,
+      r.memory.confidence ?? 0.5
     ),
   }));
 
@@ -129,7 +145,7 @@ export async function recall(
   for (const id of recognitionIds) {
     const mem = await getMemory(client, id);
     if (mem) {
-      const score = adjustedScore(1.0, mem.last_accessed, mem.access_count);
+      const score = adjustedScore(1.0, mem.last_accessed, mem.access_count, mem.confidence ?? 0.5);
       fullMemories.push({ memory: mem, score: 1.0, adjusted_score: score });
     }
   }
@@ -150,7 +166,7 @@ export async function recall(
     if (existingIds.has(r.memory.id)) continue;
     existingIds.add(r.memory.id);
 
-    const adj = adjustedScore(r.score, r.memory.last_accessed, r.memory.access_count);
+    const adj = adjustedScore(r.score, r.memory.last_accessed, r.memory.access_count, r.memory.confidence ?? 0.5);
     fullMemories.push({ memory: r.memory, score: r.score, adjusted_score: adj });
   }
 

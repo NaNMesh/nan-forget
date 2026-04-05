@@ -15,6 +15,7 @@ import type {
   MemoryPayload,
   MemorySearchFilters,
   EmbeddingProvider,
+  MemoryTier,
 } from './types.js';
 import { VECTOR_DIMENSIONS } from './types.js';
 
@@ -65,9 +66,22 @@ export function ensureSchema(db: Database.Database, provider: EmbeddingProvider)
       problem TEXT,
       solution TEXT,
       files TEXT,
-      concepts TEXT
+      concepts TEXT,
+      confidence REAL DEFAULT 0.5,
+      provenance TEXT DEFAULT 'save',
+      tier TEXT DEFAULT 'regular'
     )
   `);
+
+  // Migration: add new columns to existing DBs (safe — IF NOT EXISTS not supported for columns)
+  const colCheck = db.prepare(
+    `SELECT COUNT(*) as cnt FROM pragma_table_info('memories') WHERE name = 'confidence'`
+  ).get() as { cnt: number };
+  if (colCheck.cnt === 0) {
+    db.exec(`ALTER TABLE memories ADD COLUMN confidence REAL DEFAULT 0.5`);
+    db.exec(`ALTER TABLE memories ADD COLUMN provenance TEXT DEFAULT 'save'`);
+    db.exec(`ALTER TABLE memories ADD COLUMN tier TEXT DEFAULT 'regular'`);
+  }
 
   // Indexes
   db.exec(`
@@ -78,6 +92,7 @@ export function ensureSchema(db: Database.Database, provider: EmbeddingProvider)
     CREATE INDEX IF NOT EXISTS idx_memories_provider ON memories(embedding_provider);
     CREATE INDEX IF NOT EXISTS idx_memories_accessed ON memories(last_accessed);
     CREATE INDEX IF NOT EXISTS idx_memories_access_count ON memories(access_count);
+    CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
   `);
 
   // Vector table — sqlite-vec virtual table
@@ -111,12 +126,14 @@ export function upsertMemory(
       id, user_id, content, summary, type, status, project, tags, source,
       created_at, updated_at, expires_at, access_count, last_accessed,
       embedding_provider, embedding_model, consolidated_from,
-      problem, solution, files, concepts
+      problem, solution, files, concepts,
+      confidence, provenance, tier
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?,
-      ?, ?, ?, ?
+      ?, ?, ?, ?,
+      ?, ?, ?
     )
   `);
 
@@ -147,6 +164,9 @@ export function upsertMemory(
       memory.solution ?? null,
       memory.files ? JSON.stringify(memory.files) : null,
       memory.concepts ? JSON.stringify(memory.concepts) : null,
+      memory.confidence ?? 0.5,
+      memory.provenance ?? 'save',
+      memory.tier ?? 'regular',
     );
 
     upsertVec.run(memory.id, new Float32Array(vector));
@@ -266,6 +286,14 @@ export function searchMemories(
   if (filters.max_access_count !== undefined) {
     conditions.push('m.access_count <= ?');
     params.push(filters.max_access_count);
+  }
+  if (filters.tier) {
+    conditions.push('m.tier = ?');
+    params.push(filters.tier);
+  }
+  if (filters.min_confidence !== undefined) {
+    conditions.push('m.confidence >= ?');
+    params.push(filters.min_confidence);
   }
 
   const whereClause = conditions.length > 0
@@ -398,6 +426,14 @@ export function scrollMemories(
     conditions.push('access_count <= ?');
     params.push(filters.max_access_count);
   }
+  if (filters.tier) {
+    conditions.push('tier = ?');
+    params.push(filters.tier);
+  }
+  if (filters.min_confidence !== undefined) {
+    conditions.push('confidence >= ?');
+    params.push(filters.min_confidence);
+  }
 
   const whereClause = conditions.length > 0
     ? 'WHERE ' + conditions.join(' AND ')
@@ -458,6 +494,9 @@ function rowToMemory(row: Record<string, unknown>): Memory {
     ...(row.solution ? { solution: row.solution as string } : {}),
     ...(row.files ? { files: jsonParse(row.files as string, []) } : {}),
     ...(row.concepts ? { concepts: jsonParse(row.concepts as string, []) } : {}),
+    confidence: (row.confidence as number) ?? 0.5,
+    provenance: (row.provenance as Memory['provenance']) ?? 'save',
+    tier: (row.tier as Memory['tier']) ?? 'regular',
   };
 }
 

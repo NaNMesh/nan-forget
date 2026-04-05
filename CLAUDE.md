@@ -34,9 +34,24 @@ memory_save({
   solution: "How we solved it — the approach and key implementation details",
   concepts: ["auth", "jwt", "middleware"],
   files: ["src/auth.ts", "src/middleware.ts"],
-  tags: ["security", "api"]
+  tags: ["security", "api"],
+  provenance: "save",       // or "checkpoint", "debate", "human"
+  confidence: 0.5           // auto-set from provenance if omitted
 })
 ```
+
+### Memory Tiers
+
+Memories have a **confidence** (0.0–1.0) and **tier** (regular/core). High-confidence memories decay slower and rank higher.
+
+| Provenance | Default Confidence | Tier |
+|-----------|-------------------|------|
+| `save` | 0.5 | regular |
+| `checkpoint` | 0.65 | regular |
+| `debate` | 0.85 | **core** |
+| `human` | 0.95 | **core** |
+
+Use `provenance: "debate"` for multi-AI debate results. Use `provenance: "human"` for user-confirmed facts. Core memories survive garbage collection ~6x longer than regular ones.
 
 ### What to Save
 - **Decisions**: "We chose X over Y because Z" → include problem (why we needed to choose) and solution (what we picked and why)

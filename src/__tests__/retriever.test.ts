@@ -14,6 +14,7 @@ import {
   decayWeight,
   frequencyBoost,
   adjustedScore,
+  confidenceBoost,
 } from '../retriever.js';
 
 const client = createDb(':memory:');
@@ -62,16 +63,26 @@ describe('Scoring Functions', () => {
     expect(w).toBeGreaterThan(0.99);
   });
 
-  it('decayWeight returns ~0.5 for 30-day-old memory', () => {
+  it('decayWeight returns ~0.5 for 30-day-old memory with default confidence', () => {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    // With confidence=0.5: decay^(1-0.5) = decay^0.5 = sqrt(0.5) ≈ 0.707
     const w = decayWeight(thirtyDaysAgo);
+    expect(w).toBeCloseTo(0.707, 1);
+  });
+
+  it('decayWeight returns ~0.5 for 30-day-old memory with zero confidence', () => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    // With confidence=0: decay^(1-0) = decay^1 = 0.5 (original behavior)
+    const w = decayWeight(thirtyDaysAgo, 0);
     expect(w).toBeCloseTo(0.5, 1);
   });
 
-  it('decayWeight returns ~0.125 for 90-day-old memory', () => {
+  it('decayWeight decays much slower for high-confidence memories', () => {
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-    const w = decayWeight(ninetyDaysAgo);
-    expect(w).toBeCloseTo(0.125, 1);
+    const lowConf = decayWeight(ninetyDaysAgo, 0);    // original: ~0.125
+    const highConf = decayWeight(ninetyDaysAgo, 0.85); // should be much higher
+    expect(lowConf).toBeCloseTo(0.125, 1);
+    expect(highConf).toBeGreaterThan(0.7); // barely decays
   });
 
   it('frequencyBoost returns 1.0 for 0 accesses', () => {
@@ -85,9 +96,17 @@ describe('Scoring Functions', () => {
 
   it('adjustedScore combines all factors', () => {
     const now = new Date().toISOString();
+    // With default confidence (0.5): 0.9 * ~1.0 * ~1.35 * 0.75 ≈ 0.91
     const score = adjustedScore(0.9, now, 10);
-    // ~0.9 * ~1.0 * ~1.35 ≈ 1.2
-    expect(score).toBeGreaterThan(1.0);
+    expect(score).toBeGreaterThan(0.8);
+    expect(score).toBeLessThan(1.1);
+  });
+
+  it('adjustedScore is higher for high-confidence memories', () => {
+    const now = new Date().toISOString();
+    const lowConf = adjustedScore(0.9, now, 5, 0.5);
+    const highConf = adjustedScore(0.9, now, 5, 0.85);
+    expect(highConf).toBeGreaterThan(lowConf);
   });
 });
 
@@ -257,5 +276,137 @@ describe('Retriever Pipeline', () => {
 
     const after = await getMemory(client, id);
     expect(after!.access_count).toBeGreaterThan(beforeCount);
+  });
+});
+
+describe('Confidence & Tiering', () => {
+  it('confidenceBoost returns 0.75 for default confidence', () => {
+    expect(confidenceBoost(0.5)).toBe(0.75);
+  });
+
+  it('confidenceBoost returns 1.0 for max confidence', () => {
+    expect(confidenceBoost(1.0)).toBe(1.0);
+  });
+
+  it('confidenceBoost returns 0.5 for zero confidence', () => {
+    expect(confidenceBoost(0.0)).toBe(0.5);
+  });
+
+  it('core debate memory outranks regular memory at similar relevance', async () => {
+    // Write a regular memory about Webpack bundler config
+    const regular = await writeMemory(client, embedder, {
+      content: 'Webpack bundler config uses split chunks for code splitting',
+      type: 'fact',
+      project: PROJECT,
+      user_id: USER_ID,
+      // defaults: confidence=0.5, tier='regular', provenance='save'
+    });
+
+    // Write a core debate-validated memory on same topic (similar text for similar vectors)
+    const core = await writeMemory(client, embedder, {
+      content: 'Webpack bundler config should use split chunks with dynamic imports for code splitting',
+      type: 'decision',
+      project: PROJECT,
+      user_id: USER_ID,
+      provenance: 'debate',
+      confidence: 0.85,
+      // tier auto-derived to 'core' from provenance='debate'
+    });
+
+    // Search with similar query
+    const results = await recognize(
+      client,
+      embedder,
+      'Webpack bundler config split chunks code splitting',
+      { user_id: USER_ID, project: PROJECT },
+      10
+    );
+
+    // Find both in results
+    const coreResult = results.find(r => r.id === core.id);
+    const regularResult = results.find(r => r.id === regular.id);
+
+    expect(coreResult).toBeDefined();
+    expect(regularResult).toBeDefined();
+    // Core should have higher adjusted score due to confidence boost
+    expect(coreResult!.adjusted_score).toBeGreaterThan(regularResult!.adjusted_score);
+    expect(coreResult!.tier).toBe('core');
+    expect(coreResult!.confidence).toBe(0.85);
+    expect(regularResult!.tier).toBe('regular');
+    expect(regularResult!.confidence).toBe(0.5);
+  });
+
+  it('debate provenance auto-promotes to core tier', async () => {
+    const result = await writeMemory(client, embedder, {
+      content: 'Auto-tier test: debate provenance should be core',
+      type: 'decision',
+      project: PROJECT,
+      user_id: USER_ID,
+      provenance: 'debate',
+    });
+
+    const mem = await getMemory(client, result.id);
+    expect(mem!.tier).toBe('core');
+    expect(mem!.confidence).toBe(0.85); // DEFAULT_CONFIDENCE.debate
+    expect(mem!.provenance).toBe('debate');
+  });
+
+  it('human provenance auto-promotes to core tier', async () => {
+    const result = await writeMemory(client, embedder, {
+      content: 'The Redis cache TTL should be exactly 3600 seconds — human confirmed via production metrics dashboard',
+      type: 'decision',
+      project: PROJECT,
+      user_id: USER_ID,
+      provenance: 'human',
+    });
+
+    const mem = await getMemory(client, result.id);
+    expect(mem!.tier).toBe('core');
+    expect(mem!.confidence).toBe(0.95); // DEFAULT_CONFIDENCE.human
+  });
+
+  it('save provenance stays regular tier', async () => {
+    const result = await writeMemory(client, embedder, {
+      content: 'The Tailwind config uses a custom purple color palette with 12 shades',
+      type: 'fact',
+      project: PROJECT,
+      user_id: USER_ID,
+      // provenance defaults to 'save'
+    });
+
+    const mem = await getMemory(client, result.id);
+    expect(mem!.tier).toBe('regular');
+    expect(mem!.confidence).toBe(0.5);
+    expect(mem!.provenance).toBe('save');
+  });
+
+  it('confidence can be overridden manually', async () => {
+    const result = await writeMemory(client, embedder, {
+      content: 'Manual confidence override test',
+      type: 'fact',
+      project: PROJECT,
+      user_id: USER_ID,
+      provenance: 'save',
+      confidence: 0.9, // override default 0.5
+    });
+
+    const mem = await getMemory(client, result.id);
+    expect(mem!.confidence).toBe(0.9);
+    expect(mem!.tier).toBe('regular'); // provenance is 'save', stays regular
+  });
+
+  it('high confidence memory survives decay that archives regular memory', () => {
+    // 200 days ago — well past the ~100 day archive threshold for regular
+    const oldDate = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
+    const threshold = 0.1;
+
+    // confidence=0 gives original decay behavior (no dampening)
+    const regularDecay = decayWeight(oldDate, 0);
+    const coreDecay = decayWeight(oldDate, 0.85);
+
+    // Regular memory (confidence=0) at 200 days: 0.5^(200/30) ≈ 0.01 — well below threshold
+    expect(regularDecay).toBeLessThan(threshold);
+    // Core memory (confidence=0.85) at 200 days: decays ~15% as fast — should survive
+    expect(coreDecay).toBeGreaterThan(threshold);
   });
 });

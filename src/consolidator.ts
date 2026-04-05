@@ -247,6 +247,10 @@ async function saveConsolidated(
       ? consolidatedContent.slice(0, 77) + '...'
       : consolidatedContent;
 
+  // Inherit highest confidence and best tier from cluster members
+  const maxConfidence = Math.max(...cluster.memories.map((m) => m.confidence ?? 0.5));
+  const hasCore = cluster.memories.some((m) => m.tier === 'core');
+
   const memory: Memory = {
     id: crypto.randomUUID(),
     user_id: cluster.memories[0].user_id,
@@ -265,6 +269,9 @@ async function saveConsolidated(
     embedding_provider: provider,
     embedding_model: model,
     consolidated_from: sourceIds,
+    confidence: maxConfidence,
+    provenance: hasCore ? 'debate' : 'save',
+    tier: hasCore ? 'core' : 'regular',
   };
 
   await upsertMemory(client, memory, vector);

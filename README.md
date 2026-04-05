@@ -180,7 +180,7 @@ flowchart LR
     Q["Query"] --> S1["Stage 1: Recognition<br/>Fast vector match<br/>Returns summaries only"]
     S1 --> S2["Stage 2: Recall<br/>Full content fetch<br/>Cross-project expansion"]
     S2 --> S3["Stage 3: Association<br/>Spreading activation<br/>Related memories surface"]
-    S3 --> R["Results ranked by<br/>similarity x decay x frequency"]
+    S3 --> R["Results ranked by<br/>similarity x decay x frequency x confidence"]
 ```
 
 | Stage | What happens | Cost |
@@ -192,12 +192,13 @@ flowchart LR
 **Scoring formula:**
 
 ```
-final_score = vector_similarity * decay_weight * frequency_boost
-decay_weight = 0.5 ^ (days_since_accessed / 30)
+final_score = vector_similarity * decay_weight * frequency_boost * confidence_boost
+decay_weight = (0.5 ^ (days / 30)) ^ (1 - confidence)
 frequency_boost = log2(access_count + 1) / 10 + 1
+confidence_boost = 0.5 + 0.5 * confidence
 ```
 
-Unused memories fade on a 30-day half-life. Frequent access keeps them sharp. Cross-project search means auth decisions from Project A surface when you work on Project B.
+High-confidence memories (debate-validated, human-approved) decay much slower and rank higher. A core memory at 0.85 confidence decays at ~15% of normal rate — effectively permanent unless superseded. Cross-project search means auth decisions from Project A surface when you work on Project B.
 
 ## Consolidation Engine
 
@@ -247,8 +248,24 @@ flowchart TB
 | `solution` | string | How it was solved |
 | `concepts` | string[] | Searchable tags (`["auth", "jwt", "middleware"]`) |
 | `files` | string[] | Files involved (`["src/auth.ts"]`) |
+| `confidence` | number | Trust level 0.0–1.0 (default based on provenance) |
+| `provenance` | string | `save`, `checkpoint`, `debate`, `human` |
+| `tier` | string | `regular` or `core` (auto-derived from provenance) |
 
 All fields are embedded together into a single vector. Searches for "JWT auth bug" find memories tagged with those concepts even if the content text doesn't match literally.
+
+### Memory Tiers
+
+Not all memories are equal. Debate-validated and human-approved memories are **core** — they decay slower, rank higher in search, and survive garbage collection longer.
+
+| Provenance | Default Confidence | Auto Tier | Decay Rate |
+|-----------|-------------------|-----------|------------|
+| `save` | 0.5 | regular | Normal (30-day half-life) |
+| `checkpoint` | 0.65 | regular | ~35% slower |
+| `debate` | 0.85 | **core** | ~85% slower |
+| `human` | 0.95 | **core** | ~95% slower |
+
+Core memories are designed for the upcoming **nan-debate** system — multi-AI debate results validated by human approval get persisted as high-trust knowledge that almost never fades.
 
 ### Checkpoint Workflow
 
@@ -324,10 +341,12 @@ flowchart TB
 
 All cleanup is deterministic. No API calls. No LLM inference.
 
-- **Decay GC**: Archives memories below 0.1 decay (~100 days untouched)
+- **Decay GC**: Archives memories below 0.1 decay weight (~100 days for regular, ~600+ days for core)
 - **Expiration**: Archives memories past `expires_at` date
 - **Interference resolution**: Deduplicates >0.95 similarity matches, keeps higher access count
 - **MEMORY.md sync**: Refreshes working memory with top 5 scored memories per project
+
+Core memories (confidence ≥ 0.85) survive GC far longer than regular ones because their decay formula dampens the time factor: `decay^(1 - confidence)`. A 0.85-confidence memory at 200 days still has a decay weight above 0.1.
 
 ## Design Philosophy
 

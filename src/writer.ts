@@ -9,7 +9,10 @@ import type {
   Memory,
   MemoryType,
   MemorySource,
+  MemoryProvenance,
+  MemoryTier,
 } from './types.js';
+import { DEFAULT_CONFIDENCE } from './types.js';
 
 const DEDUP_THRESHOLD = 0.92;
 
@@ -28,6 +31,12 @@ export interface WriteMemoryInput {
   files?: string[];
   /** Searchable concepts */
   concepts?: string[];
+  /** Trust level override (0.0–1.0). Defaults based on provenance. */
+  confidence?: number;
+  /** How this memory was created. Default 'save'. */
+  provenance?: MemoryProvenance;
+  /** Trust tier override. Auto-derived from provenance if not set. */
+  tier?: MemoryTier;
 }
 
 export interface WriteResult {
@@ -102,6 +111,9 @@ export async function writeMemory(
 
   // 4. Build memory object
   const now = new Date().toISOString();
+  const provenance = input.provenance ?? 'save';
+  const confidence = input.confidence ?? DEFAULT_CONFIDENCE[provenance];
+  const tier = input.tier ?? (provenance === 'debate' || provenance === 'human' ? 'core' : 'regular');
   const memory: Memory = {
     id: crypto.randomUUID(),
     user_id: input.user_id,
@@ -123,6 +135,9 @@ export async function writeMemory(
     ...(input.solution ? { solution: input.solution } : {}),
     ...(input.files?.length ? { files: input.files } : {}),
     ...(input.concepts?.length ? { concepts: input.concepts } : {}),
+    confidence,
+    provenance,
+    tier,
   };
 
   // 5. Save to DB

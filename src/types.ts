@@ -2,6 +2,8 @@ export type MemoryType = 'fact' | 'decision' | 'preference' | 'task' | 'context'
 export type MemoryStatus = 'active' | 'archived';
 export type MemorySource = 'agent' | 'user' | 'cleaner';
 export type EmbeddingProvider = 'openai' | 'ollama';
+export type MemoryTier = 'regular' | 'core';
+export type MemoryProvenance = 'save' | 'checkpoint' | 'debate' | 'human';
 
 export interface Memory {
   id: string;
@@ -29,6 +31,12 @@ export interface Memory {
   files?: string[];
   /** Searchable concepts (architecture, auth, deploy, etc.) */
   concepts?: string[];
+  /** Trust level: 0.0 = guess, 1.0 = proven. Default 0.5 */
+  confidence: number;
+  /** How this memory was created */
+  provenance: MemoryProvenance;
+  /** Trust tier: 'regular' or 'core' (debate-validated + human-approved) */
+  tier: MemoryTier;
 }
 
 export type MemoryPayload = Omit<Memory, 'id'>;
@@ -46,6 +54,8 @@ export interface MemorySearchFilters {
   last_accessed_before?: string;
   min_access_count?: number;
   max_access_count?: number;
+  tier?: MemoryTier;
+  min_confidence?: number;
 }
 
 export const VECTOR_DIMENSIONS: Record<EmbeddingProvider, number> = {
@@ -54,3 +64,11 @@ export const VECTOR_DIMENSIONS: Record<EmbeddingProvider, number> = {
 };
 
 export const COLLECTION_NAME = 'engrams';
+
+/** Default confidence scores by provenance */
+export const DEFAULT_CONFIDENCE: Record<MemoryProvenance, number> = {
+  save: 0.5,
+  checkpoint: 0.65,
+  debate: 0.85,
+  human: 0.95,
+};
