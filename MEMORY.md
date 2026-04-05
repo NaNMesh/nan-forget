@@ -2,21 +2,22 @@
 <!-- Auto-managed. Do not edit manually. -->
 
 ## Project: MysteryPartyNow
-- [context] Context: Jubensha (剧本杀) mode is a sister game system alongside the existing mystery pa... (engram:2a9aab43-0f52-4a24-a27a-95a090dc48b2)
-- [context] Context: Jubensha (剧本杀) mode is a sister game system alongside the existing mystery pa... (engram:5544059e-a0b3-420e-a28a-437129895b0c)
+- [fact] MysteryPartyNow milestone (2026-03-31): First 4 real users on the platform (engram:f5489e8c-1be4-4cbb-a69f-102d1673db61)
+- [fact] Added framer-motion animations across all game flow components (engram:937c42d7-24b8-47f4-a622-b7983e61a394)
+- [fact] Added jubensha admin panel, template copy prevention, runtime snapshot, and i... (engram:0b4a119d-7f23-403f-b548-fd2e02587761)
+- [context] Context: Session end (2026-04-04): 4 unpushed commits on main ready to deploy: 1) Clea... (engram:46847c6a-63a3-47cb-b2ba-d9e53c4aa7bb)
 
 ## Project: nan-forget
-- [decision] Decision: NaN Mesh's moat is the trust graph, not memory (engram:16676cef-96a2-4346-8924-a522a388bde9)
-- [fact] nan-forget v0 (engram:fc1601ec-268c-404b-957d-9c80c5f50e73)
-- [fact] nan-forget Qdrant collection name is 'engrams' (defined in src/types (engram:ff4f6281-b63f-4aef-a6ca-0448a28c90d5)
-- [fact] nan-forget v0 (engram:21b8b3c3-2eae-4da8-bacd-b1dbcd176a95)
-- [decision] Decision: NaN Mesh's moat is the trust graph, not memory (engram:68af6629-44e3-4fa6-b4d9-aef705f5762d)
-- [context] Context: nan-forget session 2026-03-28: Major improvements shipped — /nan-forget saves... (engram:baf5e88d-457f-4ce1-8b99-2008e765b37a)
-- [fact] nan-forget npm publish process: CI triggers on GitHub release (not tags/pushes) (engram:809cbcce-d28c-4202-8bf2-4c8776108289)
-- [fact] nan-forget MCP registry publish process: 1) npm package must be published fir... (engram:9ba07c4f-1afd-4c5f-ac0e-657497e43004)
-- [decision] Decision: nan-forget v0 (engram:e755dc38-96f5-49b9-a6c1-f68d43c093c6)
-- [decision] Decision: nan-forget v0 (engram:2dff09a3-b8c4-4b47-b953-aa0fa5ca47fa)
-- [decision] Decision: nan-forget v0 (engram:6b89f54d-ad74-44bc-a2ec-1d1653196cf8)
-- [decision] Decision: nan-forget architecture decision: Dropped tree-structured search in favor of ... (engram:e763201d-8f24-4f4a-ba73-027baa852b6a)
-- [decision] Decision: nan-forget v0 (engram:b8d3131e-2ee6-4a85-ac7d-8390c4d0abea)
-- [fact] nan-forget vs claude-mem comparison (March 2026): nan-forget wins on token ef... (engram:c12de5a2-ec3c-42ab-b781-9ad20c1bbe62)
+- [fact] nan-forget has CI/CD via GitHub Actions at (engram:f7cd6d1f-9dab-4d03-8693-d68a53df1954)
+- [fact] Windows ESM bug: dynamic import() with raw Windows paths (C:\ (engram:f88f46ba-6ba4-4b87-b376-93a5289941f6)
+- [fact] Test memory for SQLite migration (engram:d1b3e46f-e383-412e-b787-4b6d1d505b8b)
+- [decision] Decision: Brainstorm session (2026-04-04): Multi-AI Debate & Self-Improvement concept e... (engram:7d3ff67e-8e17-4a43-8ce6-3d41a137101f)
+- [fact] Assessed multi-provider debate workflow for Claude/Codex/Ollama and recommend... (engram:ef389947-125f-4082-925e-5fbe635aea02)
+- [fact] Tiering integration test: This memory should be core tier with confidence 0 (engram:170eb9ec-a311-4ca6-8edc-b7c43d93cb30)
+
+## Project: NaNMesh
+- [decision] Decision: Session 13 (2026-03-29): Deep analysis of why nanmesh-mcp has 3,500 downloads... (engram:6563c3ef-c79d-4c38-b50a-70a925bdca55)
+- [fact] Agent distribution channels researched (2026-03-30): Moltbook (already active, 1 (engram:f11973d7-15ef-48d9-805a-119b108220e9)
+- [task] Task: PR #81 submitted to caramaschiHG/awesome-ai-agents-2026 — added NaN Mesh to "... (engram:a9e6078c-89cc-43ae-991b-43f6c635ff8d)
+- [fact] Session 13: Zero-activation fix — MCP trimmed 34→12 tools, nanmesh-memory un-... (engram:b49f3a04-5965-4bf3-9691-cdda761d9e28)
+- [fact] Agent (engram:078df67d-e807-44ae-a3cd-1e481da4d11b)
