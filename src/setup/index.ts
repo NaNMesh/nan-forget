@@ -284,6 +284,7 @@ async function installHooksAndClaudeMd(): Promise<void> {
   const hooksDir = join(claudeDir, 'hooks');
   const npxBin = resolveAbsolutePath('npx');
   const nodeBin = resolveAbsolutePath('node');
+  const nodeBinDir = dirname(nodeBin); // e.g. /opt/homebrew/bin — needed so shebang scripts find node
 
   await mkdir(hooksDir, { recursive: true });
 
@@ -314,7 +315,7 @@ process.stdin.on('end', () => {
     let project = '_global';
     const projectMatch = filePath.match(/\\/projects\\/([^/]+)\\//);
     if (projectMatch) { const s = projectMatch[1].split('-'); project = s[s.length - 1] || '_global'; }
-    execFile('${npxBin}', ['nan-forget', 'add', body.slice(0, 2000), '--type', nfType, '--project', project, '--tags', 'auto-sync,claude-memory'], { timeout: 15000 }, () => {});
+    execFile('${npxBin}', ['nan-forget', 'add', body.slice(0, 2000), '--type', nfType, '--project', project, '--tags', 'auto-sync,claude-memory'], { timeout: 15000, env: { ...process.env, PATH: '${nodeBinDir}:' + (process.env.PATH || '') } }, () => {});
   } catch {}
   process.exit(0);
 });
@@ -359,7 +360,7 @@ process.stdin.on('end', () => {
       }
     }
     for (const item of toSave.slice(-15)) {
-      try { execFileSync('${npxBin}', ['nan-forget', 'add', item.content, '--type', item.type, '--project', project, '--tags', 'auto-save,session-end'], { timeout: 10000, stdio: 'ignore' }); } catch {}
+      try { execFileSync('${npxBin}', ['nan-forget', 'add', item.content, '--type', item.type, '--project', project, '--tags', 'auto-save,session-end'], { timeout: 10000, stdio: 'ignore', env: { ...process.env, PATH: '${nodeBinDir}:' + (process.env.PATH || '') } }); } catch {}
     }
   } catch {}
   process.exit(0);
@@ -431,7 +432,7 @@ process.stdin.on('end', () => {
       hooks.SessionStart = [{
         hooks: [{
           type: 'command',
-          command: `${npxBin} nan-forget recent`,
+          command: `PATH=${nodeBinDir}:$PATH ${npxBin} nan-forget recent`,
           timeout: 10,
         }],
       }];
@@ -440,7 +441,7 @@ process.stdin.on('end', () => {
       hooks.UserPromptSubmit = [{
         hooks: [{
           type: 'command',
-          command: `${npxBin} nan-forget recall`,
+          command: `PATH=${nodeBinDir}:$PATH ${npxBin} nan-forget recall`,
           timeout: 10,
         }],
       }];
